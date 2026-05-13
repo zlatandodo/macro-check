@@ -63,6 +63,8 @@ FRED_INDICATORS = {
     "BAMLH0A0HYM2": "HY credit spread",
     "DFF":         "Fed Funds rate",
     "DGS10":       "Treasury 10Y",
+    "PPCDFSA066MSFRBPHI": "Prezzi Pagati (Philly Fed)",
+    "PPCDISA066MSFRBNY":  "Prezzi Pagati (NY Fed)",
 }
 
 # Asset/sector da yfinance (ticker → label)
@@ -323,9 +325,11 @@ def classify_cycle_phase(macro: dict) -> tuple[str, str]:
     unrate_trend = macro.get("unrate_trend")  # delta 6m
     curve = macro.get("curve_10y2y")
 
-    # Regole (semplificate — affineremo con storico)
+    # Regole a priorità decrescente
     if cpi_yoy and cpi_yoy > 3 and ism_prices and ism_prices > 70:
-        return ("stagflation", "Stagflazione: inflazione elevata e ostinata, crescita in decelerazione")
+        return ("stagflation", "Stagflazione: inflazione elevata + prezzi pagati in forte espansione")
+    if cpi_yoy and cpi_yoy > 3 and (ism_prices is None or ism_prices > 60):
+        return ("stagflation", "Stagflazione: CPI > 3% con pressioni sui prezzi elevate")
     if cpi_yoy and cpi_yoy < 2.5 and unrate_trend and unrate_trend < 0:
         return ("goldilocks", "Goldilocks: crescita stabile, inflazione contenuta, lavoro forte")
     if curve and curve < 0:

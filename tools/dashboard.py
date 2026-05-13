@@ -655,7 +655,7 @@ def render_cycle_legend():
                 )
 
 
-def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_trend):
+def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_trend, ism_prices_proxy=None):
     """Spiega con i dati reali perché è stato identificato il ciclo corrente."""
     color = PHASE_COLORS.get(phase, "#95a5a6")
     q = next((x for x in CYCLE_QUADRANTS if x["phase"] == phase), None)
@@ -678,6 +678,18 @@ def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_
             checks.append(f"🟡 CPI YoY = **{cpi_str}** → range 2–4% (reflazionistico)")
         else:
             checks.append(f"❌ CPI YoY = **{cpi_str}** → sopra 4% (inflazione elevata)")
+    if ism_prices_proxy is not None:
+        if ism_prices_proxy > 70:
+            checks.append(f"❌ Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → > 70 (pressioni inflative forti)")
+        elif ism_prices_proxy > 60:
+            checks.append(f"🟡 Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → > 60 (pressioni moderate)")
+        elif ism_prices_proxy >= 50:
+            checks.append(f"🟡 Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → in espansione ma contenuto")
+        else:
+            checks.append(f"✅ Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → < 50 (prezzi in contrazione)")
+        checks.append(f"ℹ️ Proxy = media Philly Fed + NY Fed Prices Paid (scala 0-100, >50 = espansione)")
+    else:
+        checks.append("⚠️ Prezzi Pagati proxy = **n.d.** (Philly Fed + NY Fed non disponibili)")
     if curve_last is not None:
         if curve_last >= 0:
             checks.append(f"✅ Curva 10Y-2Y = **{curve_str}%** → positiva (non invertita)")
@@ -700,10 +712,7 @@ def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_
         st.markdown(
             f"La fase è determinata dalla **prima regola soddisfatta** nel modello a priorità. "
             f"Regola attivata: `{trigger}`\n\n"
-            f"**Valori osservati oggi:**\n{checks_md}\n\n"
-            f"**Nota:** ISM Prices non disponibile via FRED — se fosse > 70 con CPI > 3% "
-            f"il modello classificherebbe *Stagflation* invece di *Reflation*. "
-            f"Inserirlo manualmente in `classify_cycle_phase()` per affinare."
+            f"**Valori osservati oggi:**\n{checks_md}"
         )
 
 
@@ -753,14 +762,24 @@ def main():
     curve_df = fred_data.get("T10Y2Y", pd.DataFrame())
     curve_last = curve_df["value"].iloc[-1] if not curve_df.empty else None
 
+    # Proxy ISM Prices Paid = media Philly Fed + NY Fed (stessa scala 0-100)
+    philly_df = fred_data.get("PPCDFSA066MSFRBPHI", pd.DataFrame())
+    ny_df = fred_data.get("PPCDISA066MSFRBNY", pd.DataFrame())
+    philly_last = float(philly_df["value"].iloc[-1]) if not philly_df.empty else None
+    ny_last = float(ny_df["value"].iloc[-1]) if not ny_df.empty else None
+    ism_prices_proxy = round(
+        sum(v for v in [philly_last, ny_last] if v is not None)
+        / sum(1 for v in [philly_last, ny_last] if v is not None), 1
+    ) if any(v is not None for v in [philly_last, ny_last]) else None
+
     phase, phase_desc = classify_cycle_phase({
         "cpi_yoy": cpi_yoy, "unrate": unrate_last,
         "unrate_trend": unrate_trend, "curve_10y2y": curve_last,
-        "ism_prices": None,
+        "ism_prices": ism_prices_proxy,
     })
 
     render_phase_banner(phase, phase_desc)
-    render_cycle_reasoning(phase, cpi_yoy, curve_last, unrate_last, unrate_trend)
+    render_cycle_reasoning(phase, cpi_yoy, curve_last, unrate_last, unrate_trend, ism_prices_proxy)
     render_cycle_legend()
 
     st.divider()
