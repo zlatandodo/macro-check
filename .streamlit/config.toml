@@ -3,3 +3,11 @@ base = "dark"
 
 [server]
 headless = true
+maxUploadSize = 10
+
+[runner]
+fastReruns = true
+
+[client]
+showErrorDetails = true
+toolbarMode = "minimal"

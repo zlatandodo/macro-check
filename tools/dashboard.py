@@ -72,10 +72,10 @@ PHASE_COLORS = {
 # =============================================================================
 
 @st.cache_data(show_spinner=False)
-def load_all_data(refresh_token: int):
-    """Scarica tutti i dati incluso COT. refresh_token cambia a ogni click su Aggiorna."""
+def load_main_data(refresh_token: int):
+    """Carica dati veloci: FRED, prezzi, NAAIM, CBOE, ISM, settori (~10-15s)."""
     fred_data, prices_summary, prices_raw = {}, {}, pd.DataFrame()
-    naaim_df, cot_df, putcall = pd.DataFrame(), pd.DataFrame(), {"total": None, "equity": None}
+    naaim_df, putcall = pd.DataFrame(), {"total": None, "equity": None}
     ism_df = pd.DataFrame()
     spy_close = pd.Series(dtype=float)
     errors = []
@@ -137,14 +137,18 @@ def load_all_data(refresh_token: int):
     except Exception as e:
         errors.append(f"Sectors: {e}")
 
-    # COT (sempre attivo)
+    return fred_data, prices_summary, prices_raw, naaim_df, putcall, sector_df, ism_df, errors
+
+
+@st.cache_data(show_spinner=False)
+def load_cot_data(cot_token: int):
+    """Carica dati COT (CFTC) — pesante ~30-60s, eseguito solo su richiesta."""
     try:
         cot_raw = fetch_cftc_data()
         cot_df = extract_cot_positioning(cot_raw)
+        return cot_df, None
     except Exception as e:
-        errors.append(f"COT: {e}")
-
-    return fred_data, prices_summary, prices_raw, naaim_df, putcall, sector_df, cot_df, ism_df, errors
+        return pd.DataFrame(), str(e)
 
 
 # =============================================================================
@@ -750,13 +754,15 @@ def main():
     with col_btn:
         if st.button("🔄 Aggiorna dati", type="primary", use_container_width=True):
             st.session_state["refresh_token"] = st.session_state.get("refresh_token", 0) + 1
-            load_all_data.clear()
+            st.session_state["cot_loaded"] = False
+            load_main_data.clear()
+            load_cot_data.clear()
 
-    # --- Carico dati ---
+    # --- Carico dati principali ---
     refresh_token = st.session_state.get("refresh_token", 0)
-    with st.spinner("Carico dati… (prima volta include COT ~30-60s)"):
+    with st.spinner("Carico dati… (~10-15s)"):
         (fred_data, prices_summary, prices_raw,
-         naaim_df, putcall, sector_df, cot_df, ism_df, errors) = load_all_data(refresh_token)
+         naaim_df, putcall, sector_df, ism_df, errors) = load_main_data(refresh_token)
 
     st.session_state["last_update"] = datetime.now().strftime("%d/%m/%Y %H:%M")
 
@@ -830,11 +836,35 @@ def main():
 
     st.divider()
 
-    # --- COT (sempre attivo) ---
+    # --- COT (on-demand) ---
     st.subheader("💼 Posizionamento COT")
     render_cot_legend()
-    render_cot_table(cot_df)
-    st.caption("Sentiment qualitativo (% su open interest). Z-score reali disponibili dopo 3-6 mesi di storico.")
+
+    cot_token = st.session_state.get("cot_token", 0)
+    cot_loaded = st.session_state.get("cot_loaded", False)
+
+    if not cot_loaded:
+        col_cot, _ = st.columns([2, 5])
+        with col_cot:
+            if st.button("📥 Carica dati COT (30-60s)", use_container_width=True):
+                st.session_state["cot_token"] = cot_token + 1
+                st.session_state["cot_loaded"] = True
+                st.rerun()
+        st.caption("Il COT (CFTC) scarica ~30MB di dati. Clicca solo quando vuoi analizzare il posizionamento.")
+    else:
+        with st.spinner("Scarico dati CFTC (~30-60s)…"):
+            cot_df, cot_err = load_cot_data(st.session_state["cot_token"])
+        if cot_err:
+            st.warning(f"COT fetch fallito: {cot_err}")
+        else:
+            render_cot_table(cot_df)
+            st.caption("Sentiment qualitativo (% su open interest). Z-score reali disponibili dopo 3-6 mesi di storico.")
+        col_reset, _ = st.columns([2, 5])
+        with col_reset:
+            if st.button("🔄 Ricarica COT", use_container_width=True):
+                load_cot_data.clear()
+                st.session_state["cot_token"] = st.session_state.get("cot_token", 0) + 1
+                st.rerun()
 
 
 if __name__ == "__main__":
