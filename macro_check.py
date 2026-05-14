@@ -63,8 +63,8 @@ FRED_INDICATORS = {
     "BAMLH0A0HYM2": "HY credit spread",
     "DFF":         "Fed Funds rate",
     "DGS10":       "Treasury 10Y",
-    "PPCDFSA066MSFRBPHI": "Prezzi Pagati (Philly Fed)",
-    "PPCDISA066MSFRBNY":  "Prezzi Pagati (NY Fed)",
+    "PPCDFSA066MSFRBPHI": "ISM Prices proxy (Philly Fed)",
+    "PPCDISA066MSFRBNY":  "ISM Prices proxy (NY Fed)",
 }
 
 # Asset/sector da yfinance (ticker → label)
@@ -158,6 +158,85 @@ def fetch_yfinance_batch(tickers: list[str], period: str = "1y") -> pd.DataFrame
         tickers, period=period, progress=False, group_by="ticker", auto_adjust=True
     )
     return df
+
+
+def fetch_ism_prices() -> pd.DataFrame:
+    """
+    Scarica ISM Manufacturing Prices Paid da Trading Economics.
+    Fonte: meta description della pagina pubblica (corrente + mese precedente).
+    I valori vengono salvati in cache locale CSV per accumulare storico nel tempo.
+    """
+    import re as _re
+    from calendar import month_name
+
+    cache_file = CACHE_DIR / "ism_prices_history.csv"
+
+    # Carica storico esistente
+    if cache_file.exists():
+        hist = pd.read_csv(cache_file)
+        hist["date"] = pd.to_datetime(hist["date"])
+    else:
+        hist = pd.DataFrame(columns=["date", "value"])
+
+    # Fetch pagina Trading Economics
+    try:
+        r = requests.get(
+            "https://tradingeconomics.com/united-states/ism-manufacturing-prices",
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+            },
+        )
+        if r.status_code != 200:
+            return hist.sort_values("date").reset_index(drop=True) if not hist.empty else pd.DataFrame()
+
+        # Estrai current + previous dalla meta description
+        # Pattern: "increased to 84.60 points in April from 78.30 points in March of 2026"
+        m = _re.search(
+            r"(?:increased|decreased|changed)\s+to\s+([\d.]+)\s+points?\s+in\s+(\w+)"
+            r".*?from\s+([\d.]+)\s+points?\s+in\s+(\w+)\s+of\s+(\d{4})",
+            r.text, _re.IGNORECASE
+        )
+        if not m:
+            # Pattern alternativo: "... to X.X ... in Month of YEAR"
+            m = _re.search(
+                r"([\d.]+)\s+points?\s+in\s+(\w+)\s+from\s+([\d.]+)\s+points?\s+in\s+(\w+)\s+of\s+(\d{4})",
+                r.text, _re.IGNORECASE
+            )
+
+        new_rows = []
+        if m:
+            months = {name.lower(): i for i, name in enumerate(month_name) if name}
+            val_curr, mon_curr = float(m.group(1)), m.group(2).lower()
+            val_prev, mon_prev = float(m.group(3)), m.group(4).lower()
+            year = int(m.group(5))
+
+            curr_month_num = months.get(mon_curr)
+            prev_month_num = months.get(mon_prev)
+            if curr_month_num:
+                curr_year = year if curr_month_num >= prev_month_num else year
+                new_rows.append({
+                    "date": pd.Timestamp(year=curr_year, month=curr_month_num, day=1),
+                    "value": val_curr,
+                })
+            if prev_month_num:
+                prev_year = year if prev_month_num <= curr_month_num else year - 1
+                new_rows.append({
+                    "date": pd.Timestamp(year=prev_year, month=prev_month_num, day=1),
+                    "value": val_prev,
+                })
+
+        if new_rows:
+            new_df = pd.DataFrame(new_rows)
+            combined = pd.concat([hist, new_df], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+            combined.to_csv(cache_file, index=False)
+            return combined
+
+    except Exception:
+        pass
+
+    return hist.sort_values("date").reset_index(drop=True) if not hist.empty else pd.DataFrame()
 
 
 def fetch_naaim() -> pd.DataFrame:

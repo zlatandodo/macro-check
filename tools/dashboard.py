@@ -31,8 +31,8 @@ except Exception:
 
 from macro_check import (
     fetch_fred, fetch_yfinance_batch, fetch_naaim, fetch_putcall_cboe,
-    fetch_cftc_data, compute_yoy, compute_sector_metrics, extract_cot_positioning,
-    classify_cycle_phase, get_positioning_recommendation,
+    fetch_ism_prices, fetch_cftc_data, compute_yoy, compute_sector_metrics,
+    extract_cot_positioning, classify_cycle_phase, get_positioning_recommendation,
     FRED_INDICATORS, ASSETS, SECTORS, COT_CONTRACTS,
 )
 
@@ -76,6 +76,7 @@ def load_all_data(refresh_token: int):
     """Scarica tutti i dati incluso COT. refresh_token cambia a ogni click su Aggiorna."""
     fred_data, prices_summary, prices_raw = {}, {}, pd.DataFrame()
     naaim_df, cot_df, putcall = pd.DataFrame(), pd.DataFrame(), {"total": None, "equity": None}
+    ism_df = pd.DataFrame()
     spy_close = pd.Series(dtype=float)
     errors = []
 
@@ -123,6 +124,12 @@ def load_all_data(refresh_token: int):
     except Exception as e:
         errors.append(f"Put/Call CBOE: {e}")
 
+    # ISM Manufacturing Prices Paid (Trading Economics)
+    try:
+        ism_df = fetch_ism_prices()
+    except Exception as e:
+        errors.append(f"ISM Prices: {e}")
+
     # Sector metrics
     sector_df = pd.DataFrame()
     try:
@@ -137,7 +144,7 @@ def load_all_data(refresh_token: int):
     except Exception as e:
         errors.append(f"COT: {e}")
 
-    return fred_data, prices_summary, prices_raw, naaim_df, putcall, sector_df, cot_df, errors
+    return fred_data, prices_summary, prices_raw, naaim_df, putcall, sector_df, cot_df, ism_df, errors
 
 
 # =============================================================================
@@ -185,8 +192,8 @@ def render_phase_banner(phase: str, phase_desc: str):
     )
 
 
-def render_kpi_row(fred_data: dict, prices_summary: dict):
-    c1, c2, c3, c4, c5 = st.columns(5)
+def render_kpi_row(fred_data: dict, prices_summary: dict, ism_last=None, ism_prev=None, ism_date="—"):
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     # VIX
     vix = prices_summary.get("^VIX", {})
     c1.metric("VIX", f"{vix.get('close', 0):.1f}" if vix.get("close") else "—",
@@ -222,6 +229,12 @@ def render_kpi_row(fred_data: dict, prices_summary: dict):
         c5.metric("Treasury 10Y", f"{v:.2f}%", f"{v - prev:+.2f}", delta_color="inverse")
     else:
         c5.metric("Treasury 10Y", "—")
+    # ISM Prices Paid
+    if ism_last is not None:
+        delta_ism = f"{ism_last - ism_prev:+.1f}" if ism_prev else None
+        c6.metric(f"ISM Prices ({ism_date})", f"{ism_last:.1f}", delta_ism, delta_color="inverse")
+    else:
+        c6.metric("ISM Prices Paid", "—")
 
 
 def render_macro_table(fred_data: dict):
@@ -655,7 +668,7 @@ def render_cycle_legend():
                 )
 
 
-def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_trend, ism_prices_proxy=None):
+def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_trend, ism_last=None, ism_prev=None, ism_date="—"):
     """Spiega con i dati reali perché è stato identificato il ciclo corrente."""
     color = PHASE_COLORS.get(phase, "#95a5a6")
     q = next((x for x in CYCLE_QUADRANTS if x["phase"] == phase), None)
@@ -678,18 +691,19 @@ def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_
             checks.append(f"🟡 CPI YoY = **{cpi_str}** → range 2–4% (reflazionistico)")
         else:
             checks.append(f"❌ CPI YoY = **{cpi_str}** → sopra 4% (inflazione elevata)")
-    if ism_prices_proxy is not None:
-        if ism_prices_proxy > 70:
-            checks.append(f"❌ Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → > 70 (pressioni inflative forti)")
-        elif ism_prices_proxy > 60:
-            checks.append(f"🟡 Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → > 60 (pressioni moderate)")
-        elif ism_prices_proxy >= 50:
-            checks.append(f"🟡 Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → in espansione ma contenuto")
+    if ism_last is not None:
+        delta_str = f" (Δ {ism_last - ism_prev:+.1f} vs mese prec.)" if ism_prev else ""
+        if ism_last > 70:
+            checks.append(f"❌ ISM Prices Paid = **{ism_last:.1f}** ({ism_date}){delta_str} → > 70 (pressioni inflative forti)")
+        elif ism_last > 60:
+            checks.append(f"🟡 ISM Prices Paid = **{ism_last:.1f}** ({ism_date}){delta_str} → > 60 (pressioni moderate)")
+        elif ism_last >= 50:
+            checks.append(f"🟡 ISM Prices Paid = **{ism_last:.1f}** ({ism_date}){delta_str} → in espansione ma contenuto")
         else:
-            checks.append(f"✅ Prezzi Pagati proxy = **{ism_prices_proxy:.1f}** → < 50 (prezzi in contrazione)")
-        checks.append(f"ℹ️ Proxy = media Philly Fed + NY Fed Prices Paid (scala 0-100, >50 = espansione)")
+            checks.append(f"✅ ISM Prices Paid = **{ism_last:.1f}** ({ism_date}){delta_str} → < 50 (prezzi in contrazione)")
+        checks.append("ℹ️ Fonte: Trading Economics · scala 0-100 · >50 = prezzi in espansione · >70 = pressioni forti")
     else:
-        checks.append("⚠️ Prezzi Pagati proxy = **n.d.** (Philly Fed + NY Fed non disponibili)")
+        checks.append("⚠️ ISM Prices Paid = **n.d.** (fetch Trading Economics fallito)")
     if curve_last is not None:
         if curve_last >= 0:
             checks.append(f"✅ Curva 10Y-2Y = **{curve_str}%** → positiva (non invertita)")
@@ -742,7 +756,7 @@ def main():
     refresh_token = st.session_state.get("refresh_token", 0)
     with st.spinner("Carico dati… (prima volta include COT ~30-60s)"):
         (fred_data, prices_summary, prices_raw,
-         naaim_df, putcall, sector_df, cot_df, errors) = load_all_data(refresh_token)
+         naaim_df, putcall, sector_df, cot_df, ism_df, errors) = load_all_data(refresh_token)
 
     st.session_state["last_update"] = datetime.now().strftime("%d/%m/%Y %H:%M")
 
@@ -762,30 +776,25 @@ def main():
     curve_df = fred_data.get("T10Y2Y", pd.DataFrame())
     curve_last = curve_df["value"].iloc[-1] if not curve_df.empty else None
 
-    # Proxy ISM Prices Paid = media Philly Fed + NY Fed (stessa scala 0-100)
-    philly_df = fred_data.get("PPCDFSA066MSFRBPHI", pd.DataFrame())
-    ny_df = fred_data.get("PPCDISA066MSFRBNY", pd.DataFrame())
-    philly_last = float(philly_df["value"].iloc[-1]) if not philly_df.empty else None
-    ny_last = float(ny_df["value"].iloc[-1]) if not ny_df.empty else None
-    ism_prices_proxy = round(
-        sum(v for v in [philly_last, ny_last] if v is not None)
-        / sum(1 for v in [philly_last, ny_last] if v is not None), 1
-    ) if any(v is not None for v in [philly_last, ny_last]) else None
+    # ISM Manufacturing Prices Paid (dato reale da Trading Economics)
+    ism_last = float(ism_df["value"].iloc[-1]) if not ism_df.empty else None
+    ism_prev = float(ism_df["value"].iloc[-2]) if len(ism_df) >= 2 else None
+    ism_date = ism_df["date"].iloc[-1].strftime("%b %Y") if not ism_df.empty else "—"
 
     phase, phase_desc = classify_cycle_phase({
         "cpi_yoy": cpi_yoy, "unrate": unrate_last,
         "unrate_trend": unrate_trend, "curve_10y2y": curve_last,
-        "ism_prices": ism_prices_proxy,
+        "ism_prices": ism_last,
     })
 
     render_phase_banner(phase, phase_desc)
-    render_cycle_reasoning(phase, cpi_yoy, curve_last, unrate_last, unrate_trend, ism_prices_proxy)
+    render_cycle_reasoning(phase, cpi_yoy, curve_last, unrate_last, unrate_trend, ism_last, ism_prev, ism_date)
     render_cycle_legend()
 
     st.divider()
 
     # --- KPI cards ---
-    render_kpi_row(fred_data, prices_summary)
+    render_kpi_row(fred_data, prices_summary, ism_last, ism_prev, ism_date)
 
     st.divider()
 
