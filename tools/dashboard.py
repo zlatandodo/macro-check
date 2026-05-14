@@ -242,29 +242,85 @@ def render_kpi_row(fred_data: dict, prices_summary: dict, ism_last=None, ism_pre
 
 
 def render_macro_table(fred_data: dict):
+    # Definisce come formattare valore e delta per ciascuna serie
+    SERIES_FORMAT = {
+        # Tassi e spread (in %): delta in punti base
+        "T10Y2Y":           ("rate_pp",   "% (punti curva)"),
+        "T10Y3M":           ("rate_pp",   "% (punti curva)"),
+        "DFF":              ("rate_pp",   "%"),
+        "DGS10":            ("rate_pp",   "%"),
+        "BAMLH0A0HYM2":     ("rate_pp",   "% (spread)"),
+        # Indici di prezzo (livello): delta come variazione % MoM
+        "CPIAUCSL":         ("index_pct", "indice"),
+        "CPILFESL":         ("index_pct", "indice"),
+        "PCEPILFE":         ("index_pct", "indice"),
+        # Tasso disoccupazione: pp
+        "UNRATE":           ("rate_pp",   "%"),
+        # NFP: migliaia di posti
+        "PAYEMS":           ("jobs_k",    "migliaia"),
+        # ISM proxy: punti indice
+        "PPCDFSA066MSFRBPHI": ("index_pt", "indice (0-100)"),
+        "PPCDISA066MSFRBNY":  ("index_pt", "indice (0-100)"),
+    }
+
     rows = []
     for code, label in FRED_INDICATORS.items():
         df = fred_data.get(code, pd.DataFrame())
         if df.empty or len(df) < 2:
             continue
-        last = df["value"].iloc[-1]
-        prev = df["value"].iloc[-2]
+        last  = df["value"].iloc[-1]
+        prev  = df["value"].iloc[-2]
+        date_curr = df["date"].iloc[-1]
+        date_prev = df["date"].iloc[-2]
         delta = last - prev
-        date = df["date"].iloc[-1].strftime("%d-%m-%Y")
+
+        fmt_type, unit = SERIES_FORMAT.get(code, ("index_pt", ""))
+
+        # Formatta valore
+        if fmt_type == "jobs_k":
+            val_str = f"{last:,.0f}K"
+        elif fmt_type in ("rate_pp", "index_pt"):
+            val_str = f"{last:.2f}"
+        else:
+            val_str = f"{last:.2f}"
+
+        # Formatta delta con unità chiara
+        if fmt_type == "index_pct":
+            # Variazione % MoM sull'indice
+            pct = (delta / prev * 100) if prev else 0
+            delta_str = f"{pct:+.2f}% MoM"
+        elif fmt_type == "rate_pp":
+            bp = delta * 100
+            delta_str = f"{bp:+.0f} bp"
+        elif fmt_type == "jobs_k":
+            delta_str = f"{delta:+,.0f}K"
+        else:
+            delta_str = f"{delta:+.2f} pt"
+
+        ref_str = date_prev.strftime("%b %Y")
         rows.append({
             "Indicatore": label,
-            "Valore": round(last, 2),
-            "Δ": round(delta, 3),
-            "Data": date,
+            "Valore": val_str,
+            f"Δ vs {ref_str}": delta_str,
+            "Unità": unit,
+            "Data rilevazione": date_curr.strftime("%b %Y"),
         })
+
     if rows:
         df_out = pd.DataFrame(rows)
+
+        def color_delta_str(v):
+            if not isinstance(v, str) or v == "—":
+                return ""
+            try:
+                num = float(v.split()[0].replace(",", ""))
+                return "color: #2ecc71" if num > 0 else ("color: #e74c3c" if num < 0 else "")
+            except Exception:
+                return ""
+
+        delta_col = [c for c in df_out.columns if c.startswith("Δ")][0]
         st.dataframe(
-            df_out.style.map(
-                lambda v: "color: #2ecc71" if isinstance(v, (int, float)) and v > 0
-                else ("color: #e74c3c" if isinstance(v, (int, float)) and v < 0 else ""),
-                subset=["Δ"]
-            ),
+            df_out.style.map(color_delta_str, subset=[delta_col]),
             use_container_width=True,
             hide_index=True,
         )
@@ -577,9 +633,9 @@ CYCLE_QUADRANTS = [
         "emoji": "🟢",
         "label": "GOLDILOCKS",
         "trigger": "CPI < 2,5% · Disoccupazione in calo · Curva positiva",
-        "desc": "Il regime ideale: crescita solida, inflazione sotto controllo, mercato del lavoro forte. La Fed è ferma o in taglio. Multipli in espansione.",
-        "asset_ok": "Equity growth (Tech, Discretionary) · Small cap · Credit IG",
-        "asset_ko": "Cash · Difensivi (Staples, Utilities) · Oro",
+        "desc": "Il regime ideale: crescita solida, inflazione sotto controllo, mercato del lavoro forte. La Fed è ferma o taglia. Multipli in espansione, risk-on diffuso.",
+        "asset_ok": "Equity growth (Tech, Discretionary) · Small/mid cap · Credit IG · REIT · EM equity",
+        "asset_ko": "Cash (drag) · Difensivi puri (Staples, Utilities) · Oro · Long duration eccessiva",
         "color": "#2ecc71",
     },
     {
@@ -587,9 +643,9 @@ CYCLE_QUADRANTS = [
         "emoji": "🔵",
         "label": "REFLATION",
         "trigger": "CPI 2–4% · Curva positiva · Crescita in accelerazione",
-        "desc": "Ripresa ciclica: domanda in rialzo trascina sia crescita che inflazione. I tassi salgono ma l'economia regge. Ciclici e commodity outperformano.",
-        "asset_ok": "Ciclici (Industrials, Financials, Materials) · Energy · Commodity · Small cap value",
-        "asset_ko": "Long duration · Staples · Mega cap growth",
+        "desc": "Ripresa ciclica: domanda in rialzo trascina sia crescita che inflazione moderata. I tassi salgono ma l'economia regge. Value batte Growth. Ciclici e commodity guidano.",
+        "asset_ok": "Ciclici (Industrials, Financials, Materials) · Energy · Commodity · Small cap value · TIPS",
+        "asset_ko": "Long duration (> 10y) · Staples · Mega cap growth · Cash",
         "color": "#3498db",
     },
     {
@@ -597,9 +653,9 @@ CYCLE_QUADRANTS = [
         "emoji": "🔴",
         "label": "STAGFLATION",
         "trigger": "CPI > 3% · ISM Prices > 70 · Crescita in decelerazione",
-        "desc": "Il regime peggiore per i portafogli tradizionali: inflazione ostinatamente alta e crescita che rallenta. La Fed è costretta a stringere anche in frenata.",
-        "asset_ok": "Oro · Argento · Energia · Difesa · TIPS / BTP€i · Cash EUR",
-        "asset_ko": "Long duration · Consumer Discretionary · REIT · HY credit · Growth tech",
+        "desc": "Il regime peggiore per portafogli 60/40: inflazione persistente e crescita che rallenta. La Fed stringe anche in frenata. Real asset e inflation hedge battono tutto.",
+        "asset_ok": "Oro · Argento · Energia · Difesa EU · TIPS/BTPEi · Cash corto · Value vs Growth",
+        "asset_ko": "Bond lunghi · Discretionary · REIT · HY credit · Growth tech · EM bonds",
         "color": "#e74c3c",
     },
     {
@@ -607,9 +663,9 @@ CYCLE_QUADRANTS = [
         "emoji": "🟡",
         "label": "LATE CYCLE",
         "trigger": "Curva 10Y-2Y < 0 (invertita) · Segnali di decelerazione",
-        "desc": "La curva invertita è il segnale storico più affidabile di recessione imminente (lead time medio 12-18 mesi). Il mercato regge ma la qualità conta.",
-        "asset_ok": "Quality defensives (Staples, Healthcare) · Oro · Cash short duration",
-        "asset_ko": "High beta · Credit HY · Ciclici",
+        "desc": "La curva invertita anticipa recessione con 12-18 mesi di lead time medio storico. Il mercato può ancora salire ma la qualità diventa fondamentale. Ridurre beta.",
+        "asset_ok": "Quality defensives (Staples, Healthcare) · Oro · T-bill/cash < 1y · Min volatility · IG corto",
+        "asset_ko": "High beta · High Yield · Ciclici · Financials · EM equity",
         "color": "#f39c12",
     },
     {
@@ -617,9 +673,9 @@ CYCLE_QUADRANTS = [
         "emoji": "🟣",
         "label": "DISINFLATION / RECESSIONE",
         "trigger": "CPI < 2% · Disoccupazione in rialzo > +0,3pp in 6m",
-        "desc": "Domanda in contrazione, prezzi in discesa, lavoro in indebolimento. La Fed taglia. Bond lunghi outperformano. Oro beneficia dei real rate calanti.",
-        "asset_ok": "Long duration treasuries · Quality defensives · Oro",
-        "asset_ko": "Ciclici · Commodity · Banche",
+        "desc": "Domanda in contrazione, prezzi in discesa, lavoro in deterioramento. La Fed taglia aggressivamente. Bond lunghi e oro outperformano. Difensivi reggono.",
+        "asset_ok": "Long duration treasury (> 10y) · Quality defensives · Oro · IG lungo · Dividend growers",
+        "asset_ko": "Ciclici · Commodity · Banche · High Yield · EM equity",
         "color": "#9b59b6",
     },
     {
@@ -627,9 +683,9 @@ CYCLE_QUADRANTS = [
         "emoji": "⚪",
         "label": "TRANSITION",
         "trigger": "Segnali contrastanti — nessuna regola prevalente",
-        "desc": "Fase di ambiguità: i dati macro non convergono verso un regime chiaro. Tipica nei turning point o quando l'economia risponde a shock esogeni.",
-        "asset_ok": "Cash per opzionalità · Posizioni esistenti invariate",
-        "asset_ko": "Nuovi rischi direzionali forti",
+        "desc": "Dati macro non convergenti: tipico nei turning point o dopo shock esogeni. Massima opzionalità, nessun rischio direzionale concentrato.",
+        "asset_ok": "Cash/T-bill per opzionalità · Posizioni esistenti invariate · Barbell quality + oro",
+        "asset_ko": "Leverage · Concentrazione · Posizioni illiquide senza thesis chiara",
         "color": "#95a5a6",
     },
 ]
