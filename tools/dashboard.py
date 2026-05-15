@@ -863,22 +863,53 @@ Numero totale di contratti aperti (long + short sommati una sola volta).
 
 ---
 
-#### 🧭 Come usare i dati in questa dashboard
+#### 🧭 Legenda segnali — come leggere la colonna "Setup"
 
-| Segnale | Lettura |
+Il **Setup** combina due informazioni: la posizione degli speculatori (% su OI) e la direzione dei Commercial.
+Più segnali convergono, più il setup è affidabile.
+
+---
+
+**🟢🟢 Contrarian rialzista** — *Alta convinzione*
+> Specs molto **short** (hanno venduto in massa) + Commercial **long** (i produttori stanno comprando).
+> È il segnale più potente: gli "stupidi" sono short, gli "smart money" comprano.
+> Storicamente precede rimbalzi significativi. Esempio attuale: **Bitcoin, VIX**.
+
+**🔴🔴 Contrarian ribassista** — *Alta convinzione*
+> Specs molto **long** (hanno comprato in massa) + Commercial **short** (i produttori stanno vendendo).
+> Mercato sovraffollato: chi doveva comprare ha già comprato. Basta un catalyst negativo per il crollo.
+> Esempio attuale: **Argento, Rame**.
+
+**🟢 Specs short** — *Media convinzione*
+> Specs short, ma i Commercial non confermano con una posizione long chiara.
+> Il segnale c'è, ma manca la "conferma degli smart money". Meno affidabile.
+> Esempio attuale: **E-mini S&P, DXY**.
+
+**🔴 Specs long** — *Media convinzione*
+> Specs long, ma i Commercial non sono chiaramente short.
+> Attenzione al sovraffollamento, ma senza il contrarian dei Commercial il segnale è meno forte.
+> Esempio attuale: **Oro**.
+
+**⚪ Neutro**
+> Nessuna posizione estrema in nessuna delle due categorie. Niente da segnalare.
+
+---
+
+| Soglia Specs %OI | Segnale |
 |---|---|
-| Commercial Net molto **long** + Specs Net molto **short** | Potenziale bottom, setup contrarian rialzista |
-| Commercial Net molto **short** + Specs Net molto **long** | Mercato sovraffollato, rischio correzione |
-| Specs Net > +15% su OI | 🟢 Bullish specs — trend in corso ma rischio affollamento |
-| Specs Net < -15% su OI | 🔴 Bearish specs — capitulation o trend ribassista confermato |
+| > +25% | 🔴 Molto long — sovraffollamento elevato |
+| +10% → +25% | 🟡 Long — posizione rialzista significativa |
+| −10% → +10% | ⚪ Neutro |
+| −25% → −10% | 🟢 Short — posizione ribassista significativa |
+| < −25% | 🟢 Molto short — capitulation, potenziale rimbalzo |
 
 ---
 
 #### ⚠️ Limiti da tenere a mente
 - I dati sono con **3-4 giorni di ritardo** (pubblicati venerdì, dati al martedì).
-- Il sentiment è qui **qualitativo** (% su open interest). Dopo 3-6 mesi di storico accumulato
-  sarà possibile calcolare **z-score reali** per sapere se una posizione è estrema rispetto alla storia.
 - I COT cambiano **una volta a settimana** — non ha senso aggiornarli più spesso.
+- Il segnale COT indica **dove si posizionano i big player**, non quando invertiranno.
+  Può restare in zona estrema per settimane prima del trigger.
         """)
 
 
