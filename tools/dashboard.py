@@ -824,86 +824,164 @@ Numero totale di contratti aperti (long + short sommati una sola volta).
 
 
 def render_cot_table(cot_df: pd.DataFrame):
-    """Tabella COT con z-score e percentile rank degli speculatori."""
+    """
+    Tabella COT in due livelli:
+    1. Segnale immediato — basato sulla settimana corrente (% specs su OI + direzione commercial)
+    2. Contesto storico — z-score e percentile rank (in expander)
+    """
     if cot_df.empty:
         st.warning("COT data non disponibili")
         return
 
     has_zscore = "mm_zscore" in cot_df.columns
 
-    rows = []
+    # ── LIVELLO 1: segnale della settimana corrente ──────────────────────────
+    rows_now = []
     for _, row in cot_df.iterrows():
-        mm_net   = row.get("mm_net")   or 0
-        comm_net = row.get("commercial_net") or 0
-        oi       = row.get("open_interest")  or 0
-        mm_z     = row.get("mm_zscore")
-        comm_z   = row.get("commercial_zscore")
-        pct_rank = row.get("mm_pct_rank")
-        n_weeks  = int(row.get("n_weeks", 0))
+        mm_net   = row.get("mm_net")          or 0
+        comm_net = row.get("commercial_net")  or 0
+        oi       = row.get("open_interest")   or 0
 
-        # Sentiment: z-score se disponibile, altrimenti % su OI
-        if has_zscore and mm_z is not None:
-            if mm_z > 2.0:
-                sent = "🔴 Specs estremo long"
-            elif mm_z > 1.0:
-                sent = "🟡 Specs long"
-            elif mm_z < -2.0:
-                sent = "🟢 Specs estremo short"
-            elif mm_z < -1.0:
-                sent = "🟢 Specs short"
+        mm_pct_oi   = mm_net   / oi * 100 if oi > 0 else None
+        comm_pct_oi = comm_net / oi * 100 if oi > 0 else None
+
+        # Segnale speculatori (% su OI questa settimana)
+        if mm_pct_oi is not None:
+            if mm_pct_oi > 25:
+                specs_sent = "🔴 Molto long"
+            elif mm_pct_oi > 10:
+                specs_sent = "🟡 Long"
+            elif mm_pct_oi < -25:
+                specs_sent = "🟢 Molto short"
+            elif mm_pct_oi < -10:
+                specs_sent = "🟢 Short"
             else:
-                sent = "⚪ Neutro"
+                specs_sent = "⚪ Neutro"
         else:
-            mm_pct_oi = mm_net / oi * 100 if oi > 0 else None
-            if mm_pct_oi is not None and mm_pct_oi > 15:
-                sent = "🟢 Bullish specs"
-            elif mm_pct_oi is not None and mm_pct_oi < -15:
-                sent = "🔴 Bearish specs"
+            specs_sent = "—"
+
+        # Segnale commercial (direzione contrarian)
+        if comm_pct_oi is not None:
+            if comm_pct_oi > 10:
+                comm_sent = "🟢 Long (bullish)"
+            elif comm_pct_oi < -10:
+                comm_sent = "🔴 Short (bearish)"
             else:
-                sent = "🟡 Neutro"
+                comm_sent = "⚪ Neutro"
+        else:
+            comm_sent = "—"
 
-        r = {
-            "Future":          row["label"],
-            "OI":              f"{int(oi):,}"      if oi      else "—",
-            "Commercial Net":  f"{int(comm_net):+,}" if comm_net else "—",
-            "Specs Net":       f"{int(mm_net):+,}"   if mm_net   else "—",
-            "Z Specs":         f"{mm_z:+.2f}"  if mm_z  is not None else "—",
-            "Z Comm":          f"{comm_z:+.2f}" if comm_z is not None else "—",
-            "Percentile":      f"{pct_rank}°"   if pct_rank is not None else "—",
-            "Storico":         f"{n_weeks}w"    if n_weeks else "—",
-            "Segnale":         sent,
-        }
-        rows.append(r)
+        # Setup combinato: la confluenza conta
+        if mm_pct_oi is not None and comm_pct_oi is not None:
+            if mm_pct_oi < -10 and comm_pct_oi > 10:
+                setup = "🟢🟢 Contrarian rialzista"
+            elif mm_pct_oi > 10 and comm_pct_oi < -10:
+                setup = "🔴🔴 Contrarian ribassista"
+            elif mm_pct_oi < -10:
+                setup = "🟢 Specs short"
+            elif mm_pct_oi > 10:
+                setup = "🔴 Specs long"
+            else:
+                setup = "⚪ Neutro"
+        else:
+            setup = "—"
 
-    df_out = pd.DataFrame(rows)
+        rows_now.append({
+            "Future":           row["label"],
+            "Open Interest":    f"{int(oi):,}"        if oi      else "—",
+            "Commercial Net":   f"{int(comm_net):+,}" if comm_net else "—",
+            "Specs Net":        f"{int(mm_net):+,}"   if mm_net   else "—",
+            "Specs %OI":        f"{mm_pct_oi:+.1f}%"  if mm_pct_oi  is not None else "—",
+            "Specs segnale":    specs_sent,
+            "Commercial":       comm_sent,
+            "Setup":            setup,
+        })
 
-    def _color_z(v):
-        """Verde per z molto negativo (specs short = contrarian bullish), rosso per molto positivo."""
-        if not isinstance(v, str) or v == "—":
-            return ""
+    df_now = pd.DataFrame(rows_now)
+
+    def _color_setup(v):
+        if not isinstance(v, str): return ""
+        if "🟢🟢" in v: return "color:#2ecc71; font-weight:700"
+        if "🔴🔴" in v: return "color:#e74c3c; font-weight:700"
+        if "🟢" in v:   return "color:#27ae60"
+        if "🔴" in v:   return "color:#c0392b"
+        return ""
+
+    def _color_pct(v):
+        if not isinstance(v, str) or v == "—": return ""
         try:
-            num = float(v)
-            if num > 2.0:   return "color: #e74c3c; font-weight:600"
-            if num > 1.0:   return "color: #f39c12"
-            if num < -2.0:  return "color: #2ecc71; font-weight:600"
-            if num < -1.0:  return "color: #27ae60"
-            return ""
-        except ValueError:
-            return ""
+            num = float(v.replace("%",""))
+            if num > 20:  return "color:#e74c3c; font-weight:600"
+            if num > 10:  return "color:#f39c12"
+            if num < -20: return "color:#2ecc71; font-weight:600"
+            if num < -10: return "color:#27ae60"
+        except ValueError: pass
+        return ""
 
     st.dataframe(
-        df_out.style.map(_color_z, subset=["Z Specs", "Z Comm"]),
+        df_now.style
+              .map(_color_pct,   subset=["Specs %OI"])
+              .map(_color_setup, subset=["Setup"]),
         use_container_width=True,
         hide_index=True,
     )
+    st.caption("Specs %OI = posizione netta degli speculatori come % dell'open interest questa settimana. Setup verde = specs short + commercial long (contrarian rialzista).")
 
-    if has_zscore and not cot_df.empty and "n_weeks" in cot_df.columns:
-        med_weeks = int(cot_df["n_weeks"].median())
-        st.caption(
-            f"Z-score calcolato su ~{med_weeks} settimane di storico ({med_weeks // 52} anni). "
-            f"Percentile = posizione corrente nella distribuzione storica. "
-            f"Z > +2 o < -2 = posizione estrema fuori dalla norma statistica."
-        )
+    # ── LIVELLO 2: contesto storico z-score (expander) ───────────────────────
+    if has_zscore:
+        with st.expander("📊 Contesto storico — Z-Score e percentile rank", expanded=False):
+            rows_z = []
+            for _, row in cot_df.iterrows():
+                mm_z     = row.get("mm_zscore")
+                comm_z   = row.get("commercial_zscore")
+                pct_rank = row.get("mm_pct_rank")
+                n_weeks  = int(row.get("n_weeks", 0))
+                mm_net   = row.get("mm_net") or 0
+                comm_net = row.get("commercial_net") or 0
+
+                if mm_z is not None:
+                    if mm_z > 2.0:    z_sent = "🔴 Estremo long"
+                    elif mm_z > 1.0:  z_sent = "🟡 Long sopra media"
+                    elif mm_z < -2.0: z_sent = "🟢 Estremo short"
+                    elif mm_z < -1.0: z_sent = "🟢 Short sotto media"
+                    else:             z_sent = "⚪ Nella norma"
+                else:
+                    z_sent = "—"
+
+                rows_z.append({
+                    "Future":     row["label"],
+                    "Specs Net":  f"{int(mm_net):+,}"   if mm_net   else "—",
+                    "Z Specs":    f"{mm_z:+.2f}"  if mm_z   is not None else "—",
+                    "Z Comm":     f"{comm_z:+.2f}" if comm_z is not None else "—",
+                    "Percentile": f"{pct_rank}°"   if pct_rank is not None else "—",
+                    "Storico":    f"{n_weeks}w ({n_weeks//52}a)" if n_weeks else "—",
+                    "Segnale Z":  z_sent,
+                })
+
+            df_z = pd.DataFrame(rows_z)
+
+            def _color_z(v):
+                if not isinstance(v, str) or v == "—": return ""
+                try:
+                    num = float(v)
+                    if num > 2.0:  return "color:#e74c3c; font-weight:600"
+                    if num > 1.0:  return "color:#f39c12"
+                    if num < -2.0: return "color:#2ecc71; font-weight:600"
+                    if num < -1.0: return "color:#27ae60"
+                except ValueError: pass
+                return ""
+
+            st.dataframe(
+                df_z.style.map(_color_z, subset=["Z Specs", "Z Comm"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            med_weeks = int(cot_df["n_weeks"].median()) if "n_weeks" in cot_df.columns else 0
+            st.caption(
+                f"Z-score calcolato su ~{med_weeks} settimane ({med_weeks // 52} anni di storico). "
+                f"Z > +2 o < -2 = posizione nel 5% più estremo della storia. "
+                f"Percentile = % delle settimane con posizione inferiore a quella corrente."
+            )
 
 
 def render_cot_extreme_signals(cot_df: pd.DataFrame):
