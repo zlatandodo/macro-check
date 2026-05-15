@@ -84,12 +84,62 @@ DODO_LOGO_IMG = f'<img src="data:image/svg+xml;base64,{_DODO_B64}" width="72" he
 
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"], .stMarkdown, .stDataFrame,
+    .stMetric, .stExpander, button, input, select, textarea {
+        font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
+    }
+
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+    header[data-testid="stHeader"] {display: none;}
     [data-testid="stSidebar"] {display: none;}
     [data-testid="collapsedControl"] {display: none;}
-    .block-container {padding-top: 1rem; padding-bottom: 2rem;}
-    .metric-label {font-size: 0.8rem !important;}
+    .block-container {
+        padding-top: 2.5rem;
+        padding-bottom: 3rem;
+        max-width: 1200px;
+    }
+
+    /* Metriche più pulite */
+    [data-testid="stMetricValue"] {
+        font-size: 1.25rem !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.02em;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.72rem !important;
+        font-weight: 500 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #666 !important;
+    }
+    [data-testid="stMetricDelta"] {
+        font-size: 0.75rem !important;
+    }
+
+    /* Expander più minimalista */
+    .streamlit-expanderHeader {
+        font-size: 0.82rem !important;
+        font-weight: 500 !important;
+        color: #888 !important;
+    }
+
+    /* Divider sottile */
+    hr { border-color: #1a1a1a !important; margin: 1.2rem 0 !important; }
+
+    /* Bottone primario raffinato */
+    .stButton > button[kind="primary"] {
+        font-family: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
+        font-weight: 500 !important;
+        font-size: 0.82rem !important;
+        letter-spacing: 0.02em;
+        border-radius: 6px !important;
+    }
+
+    /* Caption più sottili */
+    .stCaption { color: #555 !important; font-size: 0.72rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1532,16 +1582,18 @@ def main():
     # --- Top bar: logo + titolo + info + bottone refresh ---
     col_title, col_info, col_btn = st.columns([5, 3, 2])
     with col_title:
-        last_update = st.session_state.get("last_update", "—")
         st.markdown(
             f"""
-            <div style="display:flex; align-items:center; gap:14px; padding-bottom:4px;">
+            <div style="display:flex; align-items:center; gap:16px; margin-bottom:6px;">
               {DODO_LOGO_IMG}
               <div>
-                <div style="font-size:1.9rem; font-weight:800; letter-spacing:-0.03em;
-                            color:#fff; line-height:1.05;">AskDodo</div>
-                <div style="font-size:0.75rem; color:#666; margin-top:1px; letter-spacing:0.04em;">
-                  MACRO INTELLIGENCE DASHBOARD
+                <div style="font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;
+                            font-size:1.75rem; font-weight:700; letter-spacing:-0.04em;
+                            color:#f0f0f0; line-height:1.0;">AskDodo</div>
+                <div style="font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;
+                            font-size:0.65rem; color:#444; margin-top:3px;
+                            letter-spacing:0.12em; font-weight:500;">
+                  MACRO INTELLIGENCE
                 </div>
               </div>
             </div>
@@ -1551,15 +1603,15 @@ def main():
     with col_info:
         last_update = st.session_state.get("last_update", "—")
         st.markdown(
-            f"<div style='padding-top:14px; color:#666; font-size:0.82rem;'>"
-            f"Aggiornato: {last_update}<br>"
-            f"<span style='color:#444;'>FRED · yfinance · NAAIM · CBOE · CFTC</span>"
+            f"<div style='padding-top:18px; color:#555; font-size:0.75rem; line-height:1.7;'>"
+            f"Aggiornato: <span style='color:#888;'>{last_update}</span><br>"
+            f"<span style='color:#3a3a3a; font-size:0.68rem;'>FRED · yfinance · NAAIM · CBOE · CFTC</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
     with col_btn:
-        st.markdown("<div style='padding-top:10px;'></div>", unsafe_allow_html=True)
-        if st.button("🔄 Aggiorna dati", type="primary", use_container_width=True):
+        st.markdown("<div style='padding-top:16px;'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Aggiorna", type="primary", use_container_width=True):
             st.session_state["refresh_token"] = st.session_state.get("refresh_token", 0) + 1
             st.session_state["cot_loaded"] = False
             load_main_data.clear()
