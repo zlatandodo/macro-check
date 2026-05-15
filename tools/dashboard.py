@@ -724,6 +724,45 @@ def render_sector_suggestions(sector_df: pd.DataFrame, phase: str):
         )
 
 
+def render_cot_zscore_legend():
+    """Spiega lo z-score COT in modo semplice."""
+    with st.expander("📐 Cos'è lo Z-Score e come si legge?", expanded=False):
+        st.markdown("""
+#### Z-Score: quanto è insolita la posizione degli speculatori?
+
+Immagina di tenere un registro di quante scommesse rialziste o ribassiste fanno gli hedge fund
+su un mercato **ogni settimana per 5 anni** (260 settimane circa).
+
+Lo **z-score** ti dice: *"rispetto a tutto lo storico, quanto è estrema la posizione di questa settimana?"*
+
+| Z-Score | Cosa significa | In pratica |
+|---|---|---|
+| **0** | Esattamente nella media storica | Situazione normale, niente da segnalare |
+| **+1** | Un po' sopra la media | Già in zona rialzista ma non estremo |
+| **+2 o più** 🔴 | Molto sopra la media — accade <5% delle settimane | Gli speculatori sono **stracarichi di long**: chi compra ancora? |
+| **−1** | Un po' sotto la media | Già in zona ribassista ma non estremo |
+| **−2 o meno** 🟢 | Molto sotto la media — accade <5% delle settimane | Gli speculatori sono **stracarichi di short**: basta una buona notizia per il rimbalzo |
+
+---
+
+#### Perché funziona come segnale contrarian?
+
+Gli speculatori (hedge fund, CTA) sono **trend follower**: aumentano le scommesse quando il trend è già in corso.
+Quando arrivano a posizioni estreme, significa che **quasi tutti hanno già comprato (o venduto)** — non rimane
+quasi nessuno da convertire. A quel punto basta un piccolo cambio di narrative per innescare una inversione.
+
+> 🟢 **Z < −2** → specs capitolati: setup contrarian rialzista, potenziale rimbalzo
+>
+> 🔴 **Z > +2** → specs sovraffollati: mercato vulnerabile a correzione, non aggiungere long
+
+---
+
+#### Il Percentile (colonna "Percentile")
+Dice la stessa cosa in modo diverso: **"95°"** significa che la posizione attuale è più alta del 95%
+di tutte le settimane degli ultimi 5 anni. Se sei al 95° percentile long, sei in territorio estremo.
+        """)
+
+
 def render_cot_legend():
     """Pannello leggenda COT espandibile."""
     with st.expander("📖 Come leggere il COT Report", expanded=False):
@@ -974,16 +1013,135 @@ def render_cot_extreme_signals(cot_df: pd.DataFrame):
         )
 
 
+POSITIONING_CLEAR = {
+    "stagflation": {
+        "intro": "I prezzi salgono forte ma l'economia rallenta. È il scenario peggiore per un portafoglio classico: le azioni scendono perché le aziende soffrono, e i bond scendono perché i tassi salgono. Bisogna proteggersi dall'inflazione e stare lontani dalla duration.",
+        "buy": [
+            ("🥇 Oro e Argento", "Quando i soldi perdono valore, la gente compra metalli preziosi. In stagflazione salgono quasi sempre perché sono riserve di valore reale, non legate a nessuna moneta."),
+            ("⛽ Energia (XLE, petrolio, gas)", "Le aziende energetiche guadagnano DI PIÙ quando i prezzi delle materie prime salgono — sono loro stesse una delle cause dell'inflazione. Tieni il 'problema' nel portafoglio."),
+            ("🛡️ Difesa europea (Rheinmetall, Leonardo…)", "Settore con ordini governativi pluriennali e fissi. Non dipende dai consumi dei cittadini, quindi regge anche quando l'economia rallenta."),
+            ("📈 TIPS / BTPEi (bond anti-inflazione)", "Sono obbligazioni il cui valore cresce automaticamente con l'inflazione. Se il CPI sale del 5%, anche il tuo rendimento sale. Il nome lo dice: Treasury Inflation-Protected Securities."),
+            ("💵 Cash e T-bill corti (< 1 anno)", "Quando i tassi sono alti, anche il cash parcheggiato a breve rende bene (3-5%). Tienilo disponibile: quando la situazione cambia, avrai liquidità per comprare a prezzi bassi."),
+        ],
+        "sell": [
+            ("❌ Bond lunghi (> 10 anni)", "Matematica pura: se l'inflazione è alta, i tassi salgono, e i bond già emessi valgono meno. Un BTP 30y può perdere il 20-30% con un rialzo di tassi dell'1%."),
+            ("❌ Tech e Growth (Nasdaq, titoli ad alto multiplo)", "Queste aziende valgono sui profitti lontani nel futuro. Quando i tassi salgono, quei profitti futuri 'pesano' di meno oggi. Multipli crollano."),
+            ("❌ REIT (immobiliare quotato)", "Molto sensibile ai tassi: mutui più cari = meno domanda di immobili = meno utili per i REIT. Doppio danno in stagflazione."),
+            ("❌ Consumer Discretionary (lusso, auto, viaggi)", "Quando i prezzi salgono, la gente smette di comprare il superfluo. Questi settori dipendono esattamente dalla spesa discrezionale che si contrae."),
+        ],
+    },
+    "goldilocks": {
+        "intro": "L'economia cresce bene e l'inflazione è sotto controllo. È il paradiso per chi investe in azioni: le aziende guadagnano, la Fed non stringe, i multipli si espandono. Momento di prendere rischio, non di stare in cash.",
+        "buy": [
+            ("📱 Tech e Growth (Nasdaq, titoli growth)", "Quando i tassi sono stabili o scendono, i profitti futuri 'pesano' di più. I titoli growth accelerano in questo regime — è il loro momento ideale."),
+            ("🏬 Consumer Discretionary", "L'economia forte = la gente spende. Lusso, viaggi, ristoranti, auto: tutti beneficiano di un consumatore con lavoro e fiducia."),
+            ("🏘️ REIT (immobiliare)", "Tassi stabili = mutui accessibili = domanda immobiliare forte. I REIT distribuiscono dividendi alti e apprezzano bene."),
+            ("🌍 EM Equity (mercati emergenti)", "In goldilocks il dollaro è stabile e l'economia globale gira: i mercati emergenti beneficiano di un contesto internazionale favorevole."),
+            ("💳 IG Credit (bond investment grade)", "Spread bassi, aziende sane: un carry positivo senza prendere rischi eccessivi."),
+        ],
+        "sell": [
+            ("❌ Cash (troppo)", "Tenersi liquidi in goldilocks è un drag: le azioni rendono di più. Il cash erode il rendimento reale del portafoglio."),
+            ("❌ Difensivi puri (Staples, Utilities)", "Settori che 'reggono le tempeste' ma non accelerano quando il sole splende. In goldilocks restano indietro: il mercato preferisce il rischio."),
+            ("❌ Oro", "L'oro è un hedge per paura e inflazione. Se nessuno ha paura e l'inflazione è bassa, l'oro non ha ragione di salire."),
+        ],
+    },
+    "reflation": {
+        "intro": "L'economia sta accelerando e i prezzi salgono in modo moderato. È una ripresa ciclica: buone notizie per chi produce cose fisiche, cattive per chi ha bond lunghi. Il mercato ruota dal 'growth' al 'value'.",
+        "buy": [
+            ("🏭 Industriali e Materiali (XLI, XLB)", "Quando l'economia accelera, le fabbriche girano a pieno regime. Ordini in aumento, prezzi in rialzo: è il loro momento."),
+            ("🏦 Finanziari (banche, assicurazioni)", "I tassi che salgono aumentano i margini delle banche. La crescita riduce i crediti in sofferenza. Doppio vantaggio."),
+            ("⛽ Energia e Commodity", "La domanda globale in rialzo trascina i prezzi delle materie prime. Chi le produce guadagna di più."),
+            ("📊 Small Cap Value", "Le piccole imprese cicliche sono le prime a beneficiare della ripresa, spesso con leverage operativo elevato."),
+            ("📈 TIPS (parziale)", "Una copertura parziale sull'inflazione crescente ha senso, senza esagerare."),
+        ],
+        "sell": [
+            ("❌ Bond lunghi (> 10 anni)", "I tassi salgono con la reflazione: i bond lunghi perdono prezzo. Più lunga la scadenza, più si perde."),
+            ("❌ Mega cap Growth (Apple, Nvidia…)", "Ottimi business, ma in reflazione la rotazione favorisce i ciclici. Restano indietro non perché vadano male, ma perché ci sono cose che vanno meglio."),
+            ("❌ Staples (beni di prima necessità)", "Difensivi a bassa crescita. In una fase espansiva il mercato preferisce prendere rischio ciclico."),
+        ],
+    },
+    "late_cycle": {
+        "intro": "La curva dei rendimenti è invertita: i tassi a breve sono più alti di quelli a lungo. Storicamente questo ha preceduto ogni recessione degli ultimi 50 anni, con un anticipo medio di 12-18 mesi. L'economia regge ancora, ma bisogna iniziare a ridurre il rischio gradualmente.",
+        "buy": [
+            ("🏥 Healthcare e Staples (XLV, XLP)", "Le persone si ammalano e mangiano anche in recessione. Questi settori hanno flussi di cassa stabili e difensivi indipendentemente dal ciclo."),
+            ("🥇 Oro", "Quando arriva la paura di recessione, la gente compra oro come rifugio. I tassi reali tendono a scendere, e l'oro reagisce bene."),
+            ("💵 Cash e T-bill corti (< 1 anno)", "Con la curva invertita, i T-bill a 3-6 mesi rendono QUANTO O PIÙ dei bond lunghi, senza il rischio duration. Parcheggia lì e aspetta."),
+            ("🔒 IG Credit corto", "Tieniti su bond di aziende solide ma con scadenze brevi: carry positivo senza scommettere sul lungo termine."),
+        ],
+        "sell": [
+            ("❌ High Yield (junk bond)", "In avvicinamento alla recessione, le aziende deboli iniziano a soffrire. Gli spread si allargano e il prezzo crolla. Esci prima."),
+            ("❌ Ciclici (Industriali, Materiali)", "I loro utili dipendono dalla crescita economica. Se la recessione arriva, sono i primi a deludere le aspettative."),
+            ("❌ Banche", "La curva invertita comprime il margine di interesse delle banche (guadagnano meno tra tassi brevi e lunghi). Doppio rischio: meno utili ora + più crediti in sofferenza in recessione."),
+            ("❌ High Beta e speculativo", "Riduci tutto ciò che amplifica i movimenti del mercato. In late cycle non è il momento di scommesse aggressive."),
+        ],
+    },
+    "disinflation": {
+        "intro": "L'economia sta contraendosi e i prezzi scendono. La Fed ha tagliato o sta tagliando i tassi aggressivamente. I bond lunghi salgono (quando i tassi scendono, i bond già emessi valgono di più). È il momento dei difensivi e della duration lunga.",
+        "buy": [
+            ("📉 Treasury lunghi (> 10 anni, TLT)", "Quando i tassi scendono, i bond già emessi a tassi più alti valgono di più. Un Treasury 30y può guadagnare il 20-30% con un calo dei tassi dell'1%. È il trade principale in recessione."),
+            ("🥇 Oro", "I tassi reali calanti sono il miglior driver per l'oro. Meno rendimento dai bond sicuri = più appeal per l'oro come riserva di valore."),
+            ("🏥 Healthcare e Utilities", "Dividendi stabili, domanda anelastica. In recessione la gente taglia le vacanze, non le medicine."),
+            ("💳 IG Credit lungo", "Le aziende solide tengono, gli spread si comprimono con i tagli Fed. Carry + apprezzamento del capitale."),
+        ],
+        "sell": [
+            ("❌ Ciclici (Industriali, Energia, Materiali)", "La domanda globale crolla in recessione. I prezzi delle commodity scendono, gli utili crollano."),
+            ("❌ Banche", "Tassi bassi comprimono i margini. Aumento dei crediti in sofferenza. Classico settore da evitare in recessione."),
+            ("❌ High Yield", "In recessione salgono i default delle aziende deboli. Gli spread si allargano violentemente. Esci prima che diventi illiquido."),
+            ("❌ EM Equity", "Risk aversion globale = flight to quality verso dollaro e Treasury USA. I mercati emergenti soffrono doppiamente."),
+        ],
+    },
+    "transition": {
+        "intro": "I dati macro mandano segnali contrastanti: nessuna regola domina chiaramente. Può essere un turning point tra un regime e l'altro, o l'effetto di uno shock esogeno. In questa fase la cosa più intelligente è NON fare mosse aggressive e aspettare che il quadro si chiarisca.",
+        "buy": [
+            ("💵 Cash e T-bill (opzionalità)", "Non sai ancora dove andare. Il cash ti dà la flessibilità di entrare velocemente quando il segnale arriva. Non è 'non fare niente': è preservare l'opzione di agire."),
+            ("🥇 Oro (barbell)", "Un po' di oro come hedge funziona in quasi tutti i regimi. In transizione è una copertura a basso costo contro i possibili scenari negativi."),
+            ("🔒 Posizioni esistenti invariate", "Non uscire di scatto da ciò che già hai senza una thesis chiara. Tieni, non aggiungere."),
+        ],
+        "sell": [
+            ("❌ Leverage e concentrazione", "Il rischio peggiore in fase di transizione è avere posizioni molto concentrate o con leva finanziaria. Se sbaglia il regime, perdi il doppio."),
+            ("❌ Posizioni direzionali forti nuove", "Aspetta il segnale chiaro. CPI prossimo, ISM, curva: uno di questi dirà dove stiamo andando. Entra DOPO."),
+        ],
+    },
+}
+
+
 def render_positioning(phase: str):
-    text = get_positioning_recommendation(phase)
-    # Rimuovi markup rich, converti in markdown leggibile
-    import re
-    text = re.sub(r'\[bold green\]', "**", text)
-    text = re.sub(r'\[bold red\]', "**", text)
-    text = re.sub(r'\[/bold (green|red|white)\]', "**", text)
-    text = re.sub(r'\[(green|red|white)\]', "", text)
-    text = re.sub(r'\[/(green|red|white)\]', "", text)
-    st.markdown(text)
+    """Raccomandazione di posizionamento chiara e diretta per il regime corrente."""
+    data = POSITIONING_CLEAR.get(phase, POSITIONING_CLEAR["transition"])
+    phase_color = PHASE_COLORS.get(phase, "#95a5a6")
+
+    st.markdown(
+        f"<div style='font-size:0.85rem; color:#ccc; line-height:1.6; margin-bottom:0.8rem;'>"
+        f"{data['intro']}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"<div style='font-size:0.78rem; font-weight:700; color:{phase_color}; "
+        f"text-transform:uppercase; letter-spacing:0.05em; margin-bottom:4px;'>"
+        f"✅ Cosa comprare / tenere</div>",
+        unsafe_allow_html=True,
+    )
+    for title, reason in data["buy"]:
+        st.markdown(
+            f"<div style='font-size:0.78rem; color:#ddd; margin-bottom:5px; padding-left:6px;'>"
+            f"<b>{title}</b> — <span style='color:#aaa;'>{reason}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        "<div style='font-size:0.78rem; font-weight:700; color:#e74c3c; "
+        "text-transform:uppercase; letter-spacing:0.05em; margin-top:10px; margin-bottom:4px;'>"
+        "❌ Cosa ridurre / evitare</div>",
+        unsafe_allow_html=True,
+    )
+    for title, reason in data["sell"]:
+        st.markdown(
+            f"<div style='font-size:0.78rem; color:#ddd; margin-bottom:5px; padding-left:6px;'>"
+            f"<b>{title}</b> — <span style='color:#aaa;'>{reason}</span></div>",
+            unsafe_allow_html=True,
+        )
 
 
 # =============================================================================
@@ -1385,6 +1543,7 @@ def main():
             st.warning(f"COT fetch fallito: {cot_err}")
         else:
             render_cot_table(cot_df)
+            render_cot_zscore_legend()
             render_cot_extreme_signals(cot_df)
         col_reset, _ = st.columns([2, 5])
         with col_reset:
