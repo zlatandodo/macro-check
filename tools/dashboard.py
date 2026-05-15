@@ -42,45 +42,19 @@ from macro_check import (
 # =============================================================================
 
 st.set_page_config(
-    page_title="AskDodo",
+    page_title="AskDodo Country Trader",
     page_icon="🦤",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# SVG logo: Dodo con grafico stock stile Wall Street
-# Codificato in base64 perché Streamlit blocca gli SVG inline per sicurezza
-_DODO_SVG_RAW = """<svg width="72" height="72" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="bgd" cx="38%" cy="35%" r="65%">
-      <stop offset="0%" stop-color="#1a3a5c"/>
-      <stop offset="100%" stop-color="#0a1520"/>
-    </radialGradient>
-  </defs>
-  <circle cx="36" cy="36" r="35" fill="url(#bgd)" stroke="#2e86c1" stroke-width="1.5"/>
-  <polyline points="5,58 11,50 17,54 23,41 29,46 35,32 41,37 47,22 54,27 67,11"
-    fill="none" stroke="#2ecc71" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
-  <polygon points="5,58 11,50 17,54 23,41 29,46 35,32 41,37 47,22 54,27 67,11 67,64 5,64"
-    fill="#2ecc71" opacity="0.07"/>
-  <path d="M21,46 Q10,40 13,51 Q8,46 12,58 Q16,50 22,54" fill="#1f6fa3" stroke="#2e86c1" stroke-width="0.5"/>
-  <ellipse cx="38" cy="48" rx="16" ry="12" fill="#2e86c1"/>
-  <path d="M44,36 Q48,30 50,26 Q46,22 42,22 Q38,22 36,26 Q34,30 36,36 Q38,42 44,36 Z" fill="#2e86c1"/>
-  <ellipse cx="28" cy="46" rx="6" ry="3.5" fill="#1a5f8a" transform="rotate(-15 28 46)"/>
-  <path d="M50,26 Q60,22 58,29 Q62,32 52,31 Z" fill="#f0b429"/>
-  <path d="M57,27 Q62,27 59,32" fill="none" stroke="#c89020" stroke-width="1.3"/>
-  <circle cx="48" cy="25" r="3" fill="white"/>
-  <circle cx="48.7" cy="25" r="1.5" fill="#0a1520"/>
-  <circle cx="49.3" cy="24.3" r="0.6" fill="white"/>
-  <line x1="33" y1="60" x2="30" y2="69" stroke="#f0b429" stroke-width="2.8" stroke-linecap="round"/>
-  <line x1="41" y1="60" x2="44" y2="69" stroke="#f0b429" stroke-width="2.8" stroke-linecap="round"/>
-  <line x1="30" y1="69" x2="23" y2="71" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
-  <line x1="30" y1="69" x2="31" y2="72" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
-  <line x1="44" y1="69" x2="50" y2="71" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
-  <line x1="44" y1="69" x2="45" y2="72" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
-</svg>"""
-
-_DODO_B64 = base64.b64encode(_DODO_SVG_RAW.encode()).decode()
-DODO_LOGO_IMG = f'<img src="data:image/svg+xml;base64,{_DODO_B64}" width="72" height="72" style="display:block;"/>'
+# Logo: Country Trader image, caricato da file e codificato in base64
+_LOGO_PATH = Path(__file__).parent.parent / "assets" / "logo_small.png"
+try:
+    _logo_b64 = base64.b64encode(_LOGO_PATH.read_bytes()).decode()
+    DODO_LOGO_IMG = f'<img src="data:image/png;base64,{_logo_b64}" height="72" style="display:block; border-radius:50%;"/>'
+except Exception:
+    DODO_LOGO_IMG = ""
 
 st.markdown("""
 <style>
@@ -1593,7 +1567,7 @@ def main():
                 <div style="font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;
                             font-size:0.65rem; color:#444; margin-top:3px;
                             letter-spacing:0.12em; font-weight:500;">
-                  MACRO INTELLIGENCE
+                  COUNTRY TRADER · MACRO INTELLIGENCE
                 </div>
               </div>
             </div>
@@ -1613,7 +1587,7 @@ def main():
         st.markdown("<div style='padding-top:16px;'></div>", unsafe_allow_html=True)
         if st.button("🔄 Aggiorna", type="primary", use_container_width=True):
             st.session_state["refresh_token"] = st.session_state.get("refresh_token", 0) + 1
-            st.session_state["cot_loaded"] = False
+            st.session_state["cot_token"] = st.session_state.get("cot_token", 0) + 1
             load_main_data.clear()
             load_cot_data.clear()
 
@@ -1703,36 +1677,19 @@ def main():
 
     st.divider()
 
-    # --- COT (on-demand) ---
+    # --- COT (automatico) ---
     st.subheader("💼 Posizionamento COT")
     render_cot_legend()
 
     cot_token = st.session_state.get("cot_token", 0)
-    cot_loaded = st.session_state.get("cot_loaded", False)
-
-    if not cot_loaded:
-        col_cot, _ = st.columns([2, 5])
-        with col_cot:
-            if st.button("📥 Carica dati COT (30-60s)", use_container_width=True):
-                st.session_state["cot_token"] = cot_token + 1
-                st.session_state["cot_loaded"] = True
-                st.rerun()
-        st.caption("Il COT (CFTC) scarica ~30MB di dati. Clicca solo quando vuoi analizzare il posizionamento.")
+    with st.spinner("Carico dati CFTC 5 anni… (prima volta: ~2 min, poi cached)"):
+        cot_df, cot_err = load_cot_data(cot_token)
+    if cot_err:
+        st.warning(f"COT fetch fallito: {cot_err}")
     else:
-        with st.spinner("Scarico 5 anni di dati CFTC e calcolo z-score… (prima volta: ~2 min, poi cached)"):
-            cot_df, cot_err = load_cot_data(st.session_state["cot_token"])
-        if cot_err:
-            st.warning(f"COT fetch fallito: {cot_err}")
-        else:
-            render_cot_table(cot_df)
-            render_cot_zscore_legend()
-            render_cot_extreme_signals(cot_df)
-        col_reset, _ = st.columns([2, 5])
-        with col_reset:
-            if st.button("🔄 Ricarica COT", use_container_width=True):
-                load_cot_data.clear()
-                st.session_state["cot_token"] = st.session_state.get("cot_token", 0) + 1
-                st.rerun()
+        render_cot_table(cot_df)
+        render_cot_zscore_legend()
+        render_cot_extreme_signals(cot_df)
 
 
 if __name__ == "__main__":
