@@ -42,7 +42,7 @@ from macro_check import (
 # =============================================================================
 
 st.set_page_config(
-    page_title="AskDodo Country Trader",
+    page_title="Ask Dodo Country Trader",
     page_icon="🦤",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -52,7 +52,7 @@ st.set_page_config(
 _LOGO_PATH = Path(__file__).parent.parent / "assets" / "logo_small.png"
 try:
     _logo_b64 = base64.b64encode(_LOGO_PATH.read_bytes()).decode()
-    DODO_LOGO_IMG = f'<img src="data:image/png;base64,{_logo_b64}" height="72" style="display:block; border-radius:50%;"/>'
+    DODO_LOGO_IMG = f'<img src="data:image/png;base64,{_logo_b64}" height="110" style="display:block; border-radius:50%;"/>'
 except Exception:
     DODO_LOGO_IMG = ""
 
@@ -1563,11 +1563,11 @@ def main():
               <div>
                 <div style="font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;
                             font-size:1.75rem; font-weight:700; letter-spacing:-0.04em;
-                            color:#f0f0f0; line-height:1.0;">AskDodo</div>
+                            color:#f0f0f0; line-height:1.0;">Ask Dodo Country Trader</div>
                 <div style="font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;
                             font-size:0.65rem; color:#444; margin-top:3px;
                             letter-spacing:0.12em; font-weight:500;">
-                  COUNTRY TRADER · MACRO INTELLIGENCE
+                  MACRO INTELLIGENCE
                 </div>
               </div>
             </div>
