@@ -545,11 +545,13 @@ def render_sector_table(sector_df: pd.DataFrame):
             return "—"
         return f"{v:,.2f}"
 
+    fmt_dict = {c: _fmt_pct2 for c in pct_cols}
+    fmt_dict["Close"] = _fmt_close
+
     st.dataframe(
         df.style
           .map(color_num, subset=pct_cols)
-          .format({c: _fmt_pct2 for c in pct_cols})
-          .format({"Close": _fmt_close}),
+          .format(fmt_dict),
         use_container_width=True,
         hide_index=True,
     )
