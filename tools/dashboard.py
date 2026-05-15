@@ -41,11 +41,68 @@ from macro_check import (
 # =============================================================================
 
 st.set_page_config(
-    page_title="Macro Dashboard",
-    page_icon="📊",
+    page_title="AskDodo",
+    page_icon="🦤",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# SVG logo: Dodo con grafico stock stile Wall Street
+DODO_LOGO_SVG = """
+<svg width="72" height="72" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bgd" cx="38%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#1a3a5c"/>
+      <stop offset="100%" stop-color="#0a1520"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Cerchio sfondo -->
+  <circle cx="36" cy="36" r="35" fill="url(#bgd)" stroke="#2e86c1" stroke-width="1.5"/>
+
+  <!-- Grafico stock (linea verde, area fill) -->
+  <polyline
+    points="5,58 11,50 17,54 23,41 29,46 35,32 41,37 47,22 54,27 67,11"
+    fill="none" stroke="#2ecc71" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  <polygon
+    points="5,58 11,50 17,54 23,41 29,46 35,32 41,37 47,22 54,27 67,11 67,64 5,64"
+    fill="#2ecc71" opacity="0.07"/>
+
+  <!-- Dodo: coda (pennacchio) -->
+  <path d="M21,46 Q10,40 13,51 Q8,46 12,58 Q16,50 22,54"
+        fill="#1f6fa3" stroke="#2e86c1" stroke-width="0.5"/>
+
+  <!-- Dodo: corpo -->
+  <ellipse cx="38" cy="48" rx="16" ry="12" fill="#2e86c1"/>
+
+  <!-- Dodo: collo + testa (uniti in un path) -->
+  <path d="M44,36 Q48,30 50,26 Q46,22 42,22 Q38,22 36,26 Q34,30 36,36 Q38,42 44,36 Z"
+        fill="#2e86c1"/>
+
+  <!-- Dodo: ala vestigiale (piccola) -->
+  <ellipse cx="28" cy="46" rx="6" ry="3.5" fill="#1a5f8a"
+           transform="rotate(-15 28 46)"/>
+
+  <!-- Dodo: becco (uncinato, caratteristico) -->
+  <path d="M50,26 Q60,22 58,29 Q62,32 52,31 Z" fill="#f0b429"/>
+  <path d="M57,27 Q62,27 59,32" fill="none" stroke="#c89020" stroke-width="1.3"/>
+
+  <!-- Dodo: occhio -->
+  <circle cx="48" cy="25" r="3" fill="white"/>
+  <circle cx="48.7" cy="25" r="1.5" fill="#0a1520"/>
+  <circle cx="49.3" cy="24.3" r="0.6" fill="white"/>
+
+  <!-- Dodo: zampe -->
+  <line x1="33" y1="60" x2="30" y2="69" stroke="#f0b429" stroke-width="2.8" stroke-linecap="round"/>
+  <line x1="41" y1="60" x2="44" y2="69" stroke="#f0b429" stroke-width="2.8" stroke-linecap="round"/>
+  <!-- Dita -->
+  <line x1="30" y1="69" x2="23" y2="71" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
+  <line x1="30" y1="69" x2="31" y2="72" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
+  <line x1="44" y1="69" x2="50" y2="71" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
+  <line x1="44" y1="69" x2="45" y2="72" stroke="#f0b429" stroke-width="2" stroke-linecap="round"/>
+</svg>
+"""
 
 st.markdown("""
 <style>
@@ -1494,19 +1551,36 @@ def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_
 # =============================================================================
 
 def main():
-    # --- Top bar: titolo + ultimo aggiornamento + bottone refresh ---
+    # --- Top bar: logo + titolo + info + bottone refresh ---
     col_title, col_info, col_btn = st.columns([5, 3, 2])
     with col_title:
-        st.markdown("## 📊 Macro Dashboard")
+        last_update = st.session_state.get("last_update", "—")
+        st.markdown(
+            f"""
+            <div style="display:flex; align-items:center; gap:14px; padding-bottom:4px;">
+              {DODO_LOGO_SVG}
+              <div>
+                <div style="font-size:1.9rem; font-weight:800; letter-spacing:-0.03em;
+                            color:#fff; line-height:1.05;">AskDodo</div>
+                <div style="font-size:0.75rem; color:#666; margin-top:1px; letter-spacing:0.04em;">
+                  MACRO INTELLIGENCE DASHBOARD
+                </div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     with col_info:
         last_update = st.session_state.get("last_update", "—")
         st.markdown(
-            f"<div style='padding-top:10px; color:#888; font-size:0.85rem;'>"
-            f"Aggiornato: {last_update} &nbsp;·&nbsp; FRED · yfinance · NAAIM · CBOE · CFTC"
+            f"<div style='padding-top:14px; color:#666; font-size:0.82rem;'>"
+            f"Aggiornato: {last_update}<br>"
+            f"<span style='color:#444;'>FRED · yfinance · NAAIM · CBOE · CFTC</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
     with col_btn:
+        st.markdown("<div style='padding-top:10px;'></div>", unsafe_allow_html=True)
         if st.button("🔄 Aggiorna dati", type="primary", use_container_width=True):
             st.session_state["refresh_token"] = st.session_state.get("refresh_token", 0) + 1
             st.session_state["cot_loaded"] = False
