@@ -519,6 +519,126 @@ def extract_cot_positioning(cot_data: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def fetch_cftc_historical(years: int = 5) -> dict[str, pd.DataFrame]:
+    """
+    Scarica N anni di dati COT (disaggregated + financial) per calcolare z-score storici.
+    Usa la cache giornaliera già implementata in fetch_cftc_data — ogni anno viene
+    scaricato una sola volta al giorno, poi riletto da CSV.
+    """
+    current_year = datetime.now().year
+    combined: dict[str, list] = {"disaggregated": [], "financial": []}
+
+    for year in range(current_year - years + 1, current_year + 1):
+        yearly = fetch_cftc_data(year=year)
+        for key in ("disaggregated", "financial"):
+            df = yearly.get(key, pd.DataFrame())
+            if not df.empty:
+                combined[key].append(df)
+
+    return {
+        key: pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+        for key, dfs in combined.items()
+    }
+
+
+def compute_cot_zscores(hist_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """
+    Calcola z-score del posizionamento speculatori (Managed Money / Lev. Funds)
+    e dei Commercial per ogni contratto COT rispetto all'intero storico disponibile.
+
+    Ritorna DataFrame con:
+      label, mm_net, mm_zscore, mm_pct_rank, commercial_net, commercial_zscore,
+      commercial_pct_rank, open_interest, mm_pct_oi, n_weeks
+    """
+    rows = []
+    for label, (market_name, report_type) in COT_CONTRACTS.items():
+        df_hist = hist_data.get(report_type, pd.DataFrame())
+        if df_hist.empty:
+            continue
+
+        name_col = next(
+            (c for c in df_hist.columns
+             if "Market_and_Exchange" in c or "Market and Exchange" in c),
+            None,
+        )
+        if not name_col:
+            continue
+
+        match = df_hist[df_hist[name_col].str.strip() == market_name.strip()]
+        if match.empty:
+            base = market_name.split(" - ")[0]
+            match = df_hist[df_hist[name_col].str.contains(base, case=False, na=False)]
+            if match.empty:
+                continue
+
+        # Ordina per data report
+        date_col = next(
+            (c for c in df_hist.columns
+             if "Report_Date" in c or "Report Date" in c),
+            None,
+        )
+        if date_col:
+            match = match.sort_values(date_col)
+
+        # Mapping colonne per tipo report
+        if report_type == "disaggregated":
+            col_mm_l   = "M_Money_Positions_Long_All"
+            col_mm_s   = "M_Money_Positions_Short_All"
+            col_com_l  = "Prod_Merc_Positions_Long_All"
+            col_com_s  = "Prod_Merc_Positions_Short_All"
+        else:  # financial
+            col_mm_l   = "Lev_Money_Positions_Long_All"
+            col_mm_s   = "Lev_Money_Positions_Short_All"
+            col_com_l  = "Dealer_Positions_Long_All"
+            col_com_s  = "Dealer_Positions_Short_All"
+
+        try:
+            mm_long  = pd.to_numeric(match[col_mm_l],  errors="coerce")
+            mm_short = pd.to_numeric(match[col_mm_s],  errors="coerce")
+            com_long = pd.to_numeric(match[col_com_l], errors="coerce")
+            com_short= pd.to_numeric(match[col_com_s], errors="coerce")
+            oi_raw   = pd.to_numeric(match.get("Open_Interest_All", pd.Series(dtype=float)), errors="coerce")
+        except Exception:
+            continue
+
+        mm_net_series   = (mm_long - mm_short).dropna()
+        comm_net_series = (com_long - com_short).dropna()
+        oi_series       = oi_raw.dropna()
+
+        if len(mm_net_series) < 26:          # meno di 6 mesi: z-score non affidabile
+            continue
+
+        mm_curr  = float(mm_net_series.iloc[-1])
+        mm_mean  = float(mm_net_series.mean())
+        mm_std   = float(mm_net_series.std())
+        mm_z     = round((mm_curr - mm_mean) / mm_std, 2) if mm_std > 0 else 0.0
+        mm_pctk  = int((mm_net_series <= mm_curr).mean() * 100)
+
+        comm_curr = float(comm_net_series.iloc[-1]) if len(comm_net_series) > 0 else 0.0
+        comm_mean = float(comm_net_series.mean())   if len(comm_net_series) > 0 else 0.0
+        comm_std  = float(comm_net_series.std())    if len(comm_net_series) > 0 else 1.0
+        comm_z    = round((comm_curr - comm_mean) / comm_std, 2) if comm_std > 0 else 0.0
+        comm_pctk = int((comm_net_series <= comm_curr).mean() * 100) if len(comm_net_series) > 0 else 50
+
+        oi_curr    = float(oi_series.iloc[-1]) if len(oi_series) > 0 else 0.0
+        mm_pct_oi  = round(mm_curr / oi_curr * 100, 1) if oi_curr > 0 else None
+
+        rows.append({
+            "label":                label,
+            "mm_net":               mm_curr,
+            "mm_zscore":            mm_z,
+            "mm_pct_rank":          mm_pctk,
+            "commercial_net":       comm_curr,
+            "commercial_zscore":    comm_z,
+            "commercial_pct_rank":  comm_pctk,
+            "open_interest":        oi_curr,
+            "mm_pct_oi":            mm_pct_oi,
+            "n_weeks":              len(mm_net_series),
+        })
+
+    return pd.DataFrame(rows)
+
+
 # =============================================================================
 # 4. OUTPUT TERMINALE
 # =============================================================================

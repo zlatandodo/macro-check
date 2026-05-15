@@ -31,8 +31,8 @@ except Exception:
 
 from macro_check import (
     fetch_fred, fetch_yfinance_batch, fetch_naaim, fetch_putcall_cboe,
-    fetch_ism_prices, fetch_cftc_data, compute_yoy, compute_sector_metrics,
-    extract_cot_positioning, classify_cycle_phase, get_positioning_recommendation,
+    fetch_ism_prices, fetch_cftc_historical, compute_yoy, compute_sector_metrics,
+    compute_cot_zscores, classify_cycle_phase, get_positioning_recommendation,
     FRED_INDICATORS, ASSETS, SECTORS, COT_CONTRACTS,
 )
 
@@ -142,10 +142,14 @@ def load_main_data(refresh_token: int):
 
 @st.cache_data(show_spinner=False)
 def load_cot_data(cot_token: int):
-    """Carica dati COT (CFTC) — pesante ~30-60s, eseguito solo su richiesta."""
+    """
+    Carica 5 anni di dati COT (CFTC) e calcola z-score per ogni contratto.
+    Prima esecuzione: ~60-120s (download ZIP per ogni anno, poi cache giornaliera).
+    Esecuzioni successive nella stessa giornata: pochi secondi (lettura CSV cached).
+    """
     try:
-        cot_raw = fetch_cftc_data()
-        cot_df = extract_cot_positioning(cot_raw)
+        hist_data = fetch_cftc_historical(years=5)
+        cot_df = compute_cot_zscores(hist_data)
         return cot_df, None
     except Exception as e:
         return pd.DataFrame(), str(e)
@@ -530,15 +534,192 @@ def render_sector_table(sector_df: pd.DataFrame):
         return "color: #2ecc71" if v > 0 else "color: #e74c3c"
 
     pct_cols = ["1M %", "3M %", "YTD %", "RS 1M %", "vs MA50 %", "vs MA200 %"]
+
+    def _fmt_pct2(v):
+        if not isinstance(v, (int, float)) or pd.isna(v):
+            return "—"
+        return f"{v:+.2f}%"
+
+    def _fmt_close(v):
+        if not isinstance(v, (int, float)) or pd.isna(v):
+            return "—"
+        return f"{v:,.2f}"
+
     st.dataframe(
         df.style
           .map(color_num, subset=pct_cols)
-          .format({c: lambda v: fmt_pct(v) if isinstance(v, (int, float)) and not pd.isna(v) else "—"
-                   for c in pct_cols})
-          .format({"Close": lambda v: f"{v:,.0f}" if isinstance(v, (int, float)) else "—"}),
+          .format({c: _fmt_pct2 for c in pct_cols})
+          .format({"Close": _fmt_close}),
         use_container_width=True,
         hide_index=True,
     )
+
+
+# =============================================================================
+# ANALISI SETTORI LAGGARD
+# =============================================================================
+
+# Settori favoriti per regime macro (usati per incrociare RS con contesto)
+SECTOR_REGIME_FIT = {
+    "goldilocks":   ["Technology", "Discretionary", "Communications", "Financials", "Real Estate"],
+    "reflation":    ["Energy", "Materials", "Industrials", "Financials", "US Defense", "Uranium"],
+    "stagflation":  ["Energy", "Materials", "Gold miners", "Silver miners", "Uranium", "US Defense"],
+    "late_cycle":   ["Healthcare", "Staples", "Utilities"],
+    "disinflation": ["Healthcare", "Staples", "Utilities"],
+    "transition":   [],
+}
+
+
+def render_sector_suggestions(sector_df: pd.DataFrame, phase: str):
+    """
+    Analisi cross-settoriale dei laggard: incrocia RS 1M/3M, distanza dalle medie
+    mobili e regime macro per generare ipotesi di posizionamento con tesi chiara.
+    """
+    if sector_df.empty:
+        return
+
+    fit_sectors = SECTOR_REGIME_FIT.get(phase, [])
+    phase_label = phase.upper().replace("_", " ")
+    phase_color = PHASE_COLORS.get(phase, "#95a5a6")
+
+    laggards = sector_df[sector_df["rs_1m"].notna() & (sector_df["rs_1m"] < 0)].sort_values("rs_1m")
+    if laggards.empty:
+        st.success("✅ Tutti i settori hanno RS positiva vs SPY — nessun laggard da analizzare.")
+        return
+
+    st.markdown(
+        f"<div style='font-size:0.84rem; color:#999; margin-bottom:0.6rem;'>"
+        f"Regime attivo: <span style='color:{phase_color}; font-weight:700;'>{phase_label}</span>"
+        f" &nbsp;·&nbsp; Settori favoriti dal regime: "
+        f"<span style='color:#aaa;'>{', '.join(fit_sectors) if fit_sectors else 'nessuno (transizione)'}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    suggestions = []
+
+    for _, row in laggards.iterrows():
+        label       = row["label"]
+        rs1m        = row.get("rs_1m")
+        rs3m        = row.get("rs_3m")
+        pct_ma50    = row.get("pct_ma50")
+        pct_ma200   = row.get("pct_ma200")
+
+        # Fit con regime: controlla corrispondenza parziale (es. "Gold miners" ∈ fit list)
+        fits_regime = any(
+            f.lower() in label.lower() or label.lower() in f.lower()
+            for f in fit_sectors
+        )
+
+        # Stato tecnico
+        above_ma200      = pct_ma200 is not None and pct_ma200 > 0
+        above_ma50       = pct_ma50  is not None and pct_ma50  > 0
+        near_ma200       = pct_ma200 is not None and -5 < pct_ma200 < 2
+        deeply_below_ma200 = pct_ma200 is not None and pct_ma200 < -10
+        # RS migliorante: pressione di vendita che si attenua
+        rs_improving     = (rs3m is not None and rs1m is not None and rs1m > rs3m)
+
+        ma200_tag = f"{pct_ma200:+.1f}% vs MA200" if pct_ma200 is not None else "MA200 n.d."
+        ma50_tag  = f"{pct_ma50:+.1f}% vs MA50"  if pct_ma50  is not None else ""
+        rs3m_tag  = f"RS 3M: {rs3m:+.1f}%"       if rs3m      is not None else "RS 3M n.d."
+
+        if fits_regime:
+            if above_ma200 and (rs_improving or above_ma50):
+                signal = "🟢 OPPORTUNITÀ"
+                color  = "#2ecc71"
+                if rs_improving:
+                    tesi = (
+                        f"Laggard di breve in settore <b>allineato al regime {phase_label}</b>. "
+                        f"La RS mensile ({rs1m:+.1f}%) è meno negativa della trimestrale ({rs3m:+.1f}%) "
+                        f"→ la pressione di vendita si sta attenuando. Struttura tecnica integra "
+                        f"({ma200_tag}). <b>Tesi: accumulo graduale su debolezza mensile</b>, stop tecnico "
+                        f"sotto il supporto MA200."
+                    )
+                else:
+                    tesi = (
+                        f"Debolezza mensile in settore <b>favorito dal regime</b>, ma struttura tecnica intatta: "
+                        f"{ma200_tag}, {ma50_tag}. La RS negativa potrebbe riflettere rotazione interna "
+                        f"temporanea. <b>Tesi: costruire posizione in graduale</b>; il settore è sano, "
+                        f"la RS dovrebbe riallinearsi se il regime tiene."
+                    )
+            elif near_ma200 or (above_ma200 and not above_ma50):
+                signal = "🟡 WATCH"
+                color  = "#f39c12"
+                area   = f"vicino a MA200 ({ma200_tag})" if near_ma200 else f"sotto MA50 ma sopra MA200 ({ma200_tag})"
+                tesi = (
+                    f"Settore allineato al regime ma in zona tecnica borderline: {area}. "
+                    f"RS 1M {rs1m:+.1f}%, {rs3m_tag}. "
+                    f"<b>Attendere conferma del supporto</b> (chiusura settimanale sopra MA50) prima di "
+                    f"costruire posizioni. Il regime è favorevole ma il timing è prematuro."
+                )
+            elif deeply_below_ma200:
+                signal = "⚠️ REGIME OK — TECNICA KO"
+                color  = "#e67e22"
+                tesi = (
+                    f"Settore teoricamente allineato al regime <b>ma con struttura tecnica compromessa</b>: "
+                    f"{ma200_tag}. Una debolezza così profonda sotto MA200 segnala spesso deterioramento "
+                    f"fondamentale, non solo momentum. <b>Non accumulare</b> contro un downtrend strutturale: "
+                    f"attendere recupero e stabilizzazione sopra MA200."
+                )
+            else:
+                signal = "🟡 WATCH"
+                color  = "#f39c12"
+                tesi = (
+                    f"Regime favorevole ma debolezza tecnica ancora da risolvere ({ma200_tag}, {ma50_tag}). "
+                    f"RS 1M {rs1m:+.1f}%. Monitorare per ingresso dopo segnale di forza relativa."
+                )
+        else:
+            # Laggard per ragioni fondamentali (non allineato al regime)
+            if rs1m is not None and rs1m < -12:
+                signal = "🔴 EVITARE — nota estremo"
+                color  = "#c0392b"
+                tesi = (
+                    f"Il regime <b>{phase_label} non favorisce {label}</b> — il ritardo ha radici "
+                    f"fondamentali, non è rumore. RS 1M {rs1m:+.1f}%, {rs3m_tag}. "
+                    f"<i>Nota:</i> la vendita estrema potrebbe generare un rimbalzo tecnico speculativo "
+                    f"({ma200_tag}), ma senza cambio di regime non costruire posizioni strutturali. "
+                    f"Eventuale trade solo con sizing piccolo e stop stretto."
+                )
+            else:
+                signal = "🔴 EVITARE"
+                color  = "#e74c3c"
+                tesi = (
+                    f"Il regime <b>{phase_label} non favorisce {label}</b>. "
+                    f"RS 1M {rs1m:+.1f}%, {rs3m_tag}. {ma200_tag}. "
+                    f"Non costruire posizioni contro-ciclo: aspettare segnale di cambio regime "
+                    f"(CPI, ISM Prices, curva)."
+                )
+
+        suggestions.append({
+            "signal": signal, "color": color, "label": label,
+            "tesi": tesi, "fits_regime": fits_regime,
+            "rs1m": rs1m, "rs3m": rs3m, "ma200": pct_ma200, "ma50": pct_ma50,
+        })
+
+    # Ordina: opportunità prima, poi watch, poi evita; a parità di segnale: rs1m desc
+    _order = {"🟢 OPPORTUNITÀ": 0, "🟡 WATCH": 1,
+               "⚠️ REGIME OK — TECNICA KO": 2, "🔴 EVITARE — nota estremo": 3, "🔴 EVITARE": 4}
+    suggestions.sort(key=lambda x: (_order.get(x["signal"], 5), -(x["rs1m"] or 0)))
+
+    for s in suggestions[:9]:       # max 9 settori
+        rs3m_disp = f"RS 3M: {s['rs3m']:+.1f}%" if s["rs3m"] is not None else ""
+        ma200_disp = f"{s['ma200']:+.1f}% vs MA200" if s["ma200"] is not None else ""
+        meta = " · ".join(filter(None, [rs3m_disp, ma200_disp]))
+        st.markdown(
+            f"""
+            <div style="border-left:4px solid {s['color']}; background:{s['color']}12;
+                        border-radius:5px; padding:10px 14px; margin-bottom:9px;">
+              <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:4px;">
+                <span style="font-weight:700; color:{s['color']}; font-size:0.88rem;">{s['signal']}</span>
+                <span style="font-weight:600; font-size:0.9rem;">{s['label']}</span>
+                <span style="color:#e74c3c; font-size:0.82rem;">RS 1M: {s['rs1m']:+.1f}%</span>
+                <span style="color:#888; font-size:0.75rem;">{meta}</span>
+              </div>
+              <div style="font-size:0.78rem; color:#ccc; margin-top:6px; line-height:1.5;">{s['tesi']}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_cot_legend():
@@ -602,30 +783,193 @@ Numero totale di contratti aperti (long + short sommati una sola volta).
 
 
 def render_cot_table(cot_df: pd.DataFrame):
+    """Tabella COT con z-score e percentile rank degli speculatori."""
     if cot_df.empty:
         st.warning("COT data non disponibili")
         return
 
+    has_zscore = "mm_zscore" in cot_df.columns
+
     rows = []
     for _, row in cot_df.iterrows():
-        mm_net = row.get("mm_net") or 0
+        mm_net   = row.get("mm_net")   or 0
         comm_net = row.get("commercial_net") or 0
-        oi = row.get("open_interest") or 0
-        mm_pct = (mm_net / oi * 100) if oi > 0 else None
-        if mm_pct is not None and mm_pct > 15:
-            sent = "🟢 Bullish specs"
-        elif mm_pct is not None and mm_pct < -15:
-            sent = "🔴 Bearish specs"
+        oi       = row.get("open_interest")  or 0
+        mm_z     = row.get("mm_zscore")
+        comm_z   = row.get("commercial_zscore")
+        pct_rank = row.get("mm_pct_rank")
+        n_weeks  = int(row.get("n_weeks", 0))
+
+        # Sentiment: z-score se disponibile, altrimenti % su OI
+        if has_zscore and mm_z is not None:
+            if mm_z > 2.0:
+                sent = "🔴 Specs estremo long"
+            elif mm_z > 1.0:
+                sent = "🟡 Specs long"
+            elif mm_z < -2.0:
+                sent = "🟢 Specs estremo short"
+            elif mm_z < -1.0:
+                sent = "🟢 Specs short"
+            else:
+                sent = "⚪ Neutro"
         else:
-            sent = "🟡 Neutro"
-        rows.append({
-            "Future": row["label"],
-            "Open Interest": f"{int(oi):,}" if oi else "—",
-            "Commercial Net": f"{int(comm_net):+,}" if comm_net else "—",
-            "Specs Net": f"{int(mm_net):+,}" if mm_net else "—",
-            "Sentiment": sent,
-        })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            mm_pct_oi = mm_net / oi * 100 if oi > 0 else None
+            if mm_pct_oi is not None and mm_pct_oi > 15:
+                sent = "🟢 Bullish specs"
+            elif mm_pct_oi is not None and mm_pct_oi < -15:
+                sent = "🔴 Bearish specs"
+            else:
+                sent = "🟡 Neutro"
+
+        r = {
+            "Future":          row["label"],
+            "OI":              f"{int(oi):,}"      if oi      else "—",
+            "Commercial Net":  f"{int(comm_net):+,}" if comm_net else "—",
+            "Specs Net":       f"{int(mm_net):+,}"   if mm_net   else "—",
+            "Z Specs":         f"{mm_z:+.2f}"  if mm_z  is not None else "—",
+            "Z Comm":          f"{comm_z:+.2f}" if comm_z is not None else "—",
+            "Percentile":      f"{pct_rank}°"   if pct_rank is not None else "—",
+            "Storico":         f"{n_weeks}w"    if n_weeks else "—",
+            "Segnale":         sent,
+        }
+        rows.append(r)
+
+    df_out = pd.DataFrame(rows)
+
+    def _color_z(v):
+        """Verde per z molto negativo (specs short = contrarian bullish), rosso per molto positivo."""
+        if not isinstance(v, str) or v == "—":
+            return ""
+        try:
+            num = float(v)
+            if num > 2.0:   return "color: #e74c3c; font-weight:600"
+            if num > 1.0:   return "color: #f39c12"
+            if num < -2.0:  return "color: #2ecc71; font-weight:600"
+            if num < -1.0:  return "color: #27ae60"
+            return ""
+        except ValueError:
+            return ""
+
+    st.dataframe(
+        df_out.style.map(_color_z, subset=["Z Specs", "Z Comm"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if has_zscore and not cot_df.empty and "n_weeks" in cot_df.columns:
+        med_weeks = int(cot_df["n_weeks"].median())
+        st.caption(
+            f"Z-score calcolato su ~{med_weeks} settimane di storico ({med_weeks // 52} anni). "
+            f"Percentile = posizione corrente nella distribuzione storica. "
+            f"Z > +2 o < -2 = posizione estrema fuori dalla norma statistica."
+        )
+
+
+def render_cot_extreme_signals(cot_df: pd.DataFrame):
+    """
+    Segnala posizioni COT con z-score |z| ≥ 1.5: genera tesi di posizionamento
+    con analisi di confluenza tra speculatori e commercial.
+    """
+    if cot_df.empty or "mm_zscore" not in cot_df.columns:
+        return
+
+    extremes = cot_df[cot_df["mm_zscore"].abs() >= 1.5].copy()
+    if extremes.empty:
+        return
+
+    st.subheader("🚨 Segnali COT estremi — posizioni fuori dalla norma storica")
+    st.caption(
+        "Mostrati solo i contratti con z-score speculatori |z| ≥ 1.5. "
+        "Un segnale COT è più affidabile quando speculatori e commercial sono in direzioni opposte (confluenza)."
+    )
+
+    for _, row in extremes.sort_values("mm_zscore").iterrows():
+        z        = row["mm_zscore"]
+        comm_z   = row.get("commercial_zscore") or 0.0
+        mm_net   = row["mm_net"]
+        comm_net = row["commercial_net"]
+        pct_rank = row.get("mm_pct_rank", 50)
+        n_weeks  = int(row.get("n_weeks", 0))
+        label    = row["label"]
+        anni     = max(n_weeks // 52, 1)
+
+        # Confluenza commercial
+        if z < 0 and comm_z > 0.5:
+            confluence = f"✅ <b>Confluenza alta:</b> i Commercial sono anch'essi in posizione long sopra la media storica (z={comm_z:+.2f}) → segnale contrarian di qualità elevata."
+        elif z < 0 and comm_z > 0:
+            confluence = f"🟡 <b>Confluenza parziale:</b> i Commercial leggermente long (z={comm_z:+.2f}) — segnale supportato ma non estremo."
+        elif z < 0 and comm_z < -0.5:
+            confluence = f"⚠️ <b>No confluenza:</b> i Commercial sono anch'essi short (z={comm_z:+.2f}) — il segnale contrarian è meno affidabile, possibile downtrend strutturale."
+        elif z > 0 and comm_z < -0.5:
+            confluence = f"✅ <b>Confluenza alta:</b> i Commercial sono short sotto la media (z={comm_z:+.2f}) → mercato sovraffollato con pressione hedger contrarian. Rischio inversione elevato."
+        elif z > 0 and comm_z < 0:
+            confluence = f"🟡 <b>Confluenza parziale:</b> i Commercial leggermente short (z={comm_z:+.2f}) — segnale di affollamento supportato ma non estremo."
+        else:
+            confluence = f"⚪ <b>No confluenza:</b> i Commercial non confermano (z={comm_z:+.2f}) — segnale meno affidabile."
+
+        if z <= -2.0:
+            color = "#2ecc71"
+            title = f"🟢 SPECS ESTREMO SHORT — {label}"
+            desc  = (
+                f"Gli speculatori sono al {pct_rank}° percentile di posizionamento short negli ultimi {anni} anni "
+                f"(z={z:+.2f}, {n_weeks} settimane di storico)."
+            )
+            tesi  = (
+                f"<b>Setup contrarian rialzista:</b> specs capitolati. A questi livelli di short estremo "
+                f"il mercato è spesso pronto per un rimbalzo su qualunque catalyst positivo (dato macro, "
+                f"notizia geopolitica, short squeeze). "
+                f"Tesi operativa: posizione long speculativa con stop tecnico sotto i minimi recenti, "
+                f"size ridotto rispetto alla posizione strutturale."
+            )
+        elif z <= -1.5:
+            color = "#27ae60"
+            title = f"🟢 SPECS SHORT SIGNIFICATIVO — {label}"
+            desc  = (
+                f"Speculatori in posizione short rilevante ({pct_rank}° percentile, z={z:+.2f}, {anni} anni di storico)."
+            )
+            tesi  = (
+                f"Posizionamento elevato ma non ancora ai livelli di capitulation estrema. "
+                f"Monitorare per ulteriore deterioramento che potrebbe generare un segnale contrarian più pulito, "
+                f"oppure attendere un primo segnale di forza prima di costruire long."
+            )
+        elif z >= 2.0:
+            color = "#e74c3c"
+            title = f"🔴 SPECS ESTREMO LONG — {label}"
+            desc  = (
+                f"Gli speculatori sono al {pct_rank}° percentile di posizionamento long negli ultimi {anni} anni "
+                f"(z={z:+.2f}, {n_weeks} settimane di storico)."
+            )
+            tesi  = (
+                f"<b>Mercato sovraffollato:</b> quasi tutti gli speculatori sono già inside. "
+                f"Rischio di 'long squeeze' se arriva un catalyst negativo — chi deve vendere, vende tutti insieme. "
+                f"Tesi operativa: <b>non aggiungere long</b> in questa fase; considerare hedging o riduzione. "
+                f"Non è necessariamente un segnale di short immediato, ma il risk/reward è sfavorevole per nuovi ingressi."
+            )
+        else:  # z >= 1.5
+            color = "#e67e22"
+            title = f"🟡 SPECS LONG ELEVATO — {label}"
+            desc  = (
+                f"Speculatori in posizione long significativa ({pct_rank}° percentile, z={z:+.2f}, {anni} anni di storico)."
+            )
+            tesi  = (
+                f"Posizionamento elevato — affollamento in costruzione. Non aggiungere long aggressivamente; "
+                f"il risk/reward si sta deteriorando. Monitorare per segnali di distribuzione o di z-score che sale ulteriormente verso il territorio estremo."
+            )
+
+        st.markdown(
+            f"""
+            <div style="border-left:5px solid {color}; background:{color}14;
+                        border-radius:6px; padding:13px 17px; margin-bottom:13px;">
+              <div style="font-weight:700; color:{color}; font-size:1rem; margin-bottom:5px;">{title}</div>
+              <div style="font-size:0.82rem; color:#ddd; margin-bottom:5px;">{desc}</div>
+              <div style="font-size:0.78rem; color:#aaa; margin-bottom:7px;">{confluence}</div>
+              <div style="font-size:0.79rem; color:#ccc; border-top:1px solid #2a2a2a; padding-top:7px;">
+                📌 {tesi}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_positioning(phase: str):
@@ -1012,6 +1356,9 @@ def main():
     with col_tbl:
         render_sector_table(sector_df)
 
+    st.subheader("🎯 Ipotesi di posizionamento sui settori laggard")
+    render_sector_suggestions(sector_df, phase)
+
     st.divider()
 
     # --- COT (on-demand) ---
@@ -1030,13 +1377,13 @@ def main():
                 st.rerun()
         st.caption("Il COT (CFTC) scarica ~30MB di dati. Clicca solo quando vuoi analizzare il posizionamento.")
     else:
-        with st.spinner("Scarico dati CFTC (~30-60s)…"):
+        with st.spinner("Scarico 5 anni di dati CFTC e calcolo z-score… (prima volta: ~2 min, poi cached)"):
             cot_df, cot_err = load_cot_data(st.session_state["cot_token"])
         if cot_err:
             st.warning(f"COT fetch fallito: {cot_err}")
         else:
             render_cot_table(cot_df)
-            st.caption("Sentiment qualitativo (% su open interest). Z-score reali disponibili dopo 3-6 mesi di storico.")
+            render_cot_extreme_signals(cot_df)
         col_reset, _ = st.columns([2, 5])
         with col_reset:
             if st.button("🔄 Ricarica COT", use_container_width=True):
