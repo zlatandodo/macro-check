@@ -332,24 +332,39 @@ def render_assets_table(prices_summary: dict):
         d = prices_summary.get(ticker)
         if not d:
             continue
+
+        def pct_str(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return "—"
+            return f"{v:+.2f}%"
+
         rows.append({
             "Asset": label,
-            "Close": round(d["close"], 2),
-            "1M %": round(d["change_1m"], 2) if d["change_1m"] is not None else None,
-            "3M %": round(d["change_3m"], 2) if d["change_3m"] is not None else None,
-            "YTD %": round(d["ytd"], 2) if d["ytd"] is not None else None,
+            "Close": f"{d['close']:.2f}",
+            "1M": pct_str(d["change_1m"]),
+            "3M": pct_str(d["change_3m"]),
+            "YTD": pct_str(d["ytd"]),
             "Data": d["date"],
+            # valori numerici nascosti per il coloring
+            "_1m": d["change_1m"],
+            "_3m": d["change_3m"],
+            "_ytd": d["ytd"],
         })
     if rows:
         df_out = pd.DataFrame(rows)
 
         def color_pct_cell(v):
-            if not isinstance(v, (int, float)) or pd.isna(v):
+            if not isinstance(v, str) or v == "—":
                 return ""
-            return "color: #2ecc71" if v > 0 else "color: #e74c3c"
+            try:
+                num = float(v.replace("%", "").replace("+", ""))
+                return "color: #2ecc71" if num > 0 else "color: #e74c3c"
+            except Exception:
+                return ""
 
+        display_cols = ["Asset", "Close", "1M", "3M", "YTD", "Data"]
         st.dataframe(
-            df_out.style.map(color_pct_cell, subset=["1M %", "3M %", "YTD %"]),
+            df_out[display_cols].style.map(color_pct_cell, subset=["1M", "3M", "YTD"]),
             use_container_width=True,
             hide_index=True,
         )
@@ -412,16 +427,18 @@ def render_sentiment_table(naaim_df: pd.DataFrame, putcall: dict, prices_summary
     if vix.get("close"):
         val = vix["close"]
         ch = vix.get("change_1m")
-        if val > 30:
-            r = "🟢 Panico (contrarian bullish)"
+        if val > 40:
+            r = "🟢 Panico estremo — capitulation (forte contrarian bullish)"
+        elif val > 30:
+            r = "🟢 Panico — fear elevato (contrarian bullish)"
         elif val > 20:
-            r = "🟡 Stress elevato"
-        elif val < 12:
-            r = "🔴 Compiacimento estremo"
-        elif val < 14:
-            r = "🟡 Compiacimento"
+            r = "🟡 Stress — incertezza sopra la media"
+        elif val > 14:
+            r = "⚪ Normale — volatilità nella norma storica"
+        elif val > 12:
+            r = "🟡 Compiacimento — bassa protezione, attenzione"
         else:
-            r = "⚪ Normale"
+            r = "🔴 Compiacimento estremo — mercato non prezza rischi"
         rows.append({"Indicatore": "VIX", "Valore": f"{val:.2f}",
                      "Δ": fmt_pct(ch), "Lettura": r})
 
@@ -621,6 +638,106 @@ def render_positioning(phase: str):
     text = re.sub(r'\[(green|red|white)\]', "", text)
     text = re.sub(r'\[/(green|red|white)\]', "", text)
     st.markdown(text)
+
+
+# =============================================================================
+# LEGENDA VIX
+# =============================================================================
+
+def render_vix_legend():
+    with st.expander("📖 Legenda VIX — soglie e interpretazione", expanded=False):
+        st.markdown("""
+Il **VIX (CBOE Volatility Index)** misura la volatilità implicita attesa a 30 giorni sulle opzioni S&P 500.
+È il termometro della paura del mercato — si legge in chiave **contrarian**.
+
+| Livello VIX | Zona | Interpretazione contrarian |
+|---|---|---|
+| **> 40** | 🟢 Panico estremo | Capitulation: storicamente i migliori punti di entrata su equity |
+| **30 – 40** | 🟢 Panico | Vendite forzate, spread alti: opportunità per compratori pazienti |
+| **20 – 30** | 🟡 Stress elevato | Incertezza sopra la media, protezione cara ma necessaria |
+| **14 – 20** | ⚪ Normale | Range storico neutro, nessun segnale direzionale |
+| **12 – 14** | 🟡 Compiacimento | Poca protezione comprata: mercato vulnerabile a shock |
+| **< 12** | 🔴 Compiacimento estremo | Euforia: storicamente associato a top di mercato o correzioni imminenti |
+
+**Nota:** il VIX è un indicatore di breve termine. I segnali estremi (< 12 o > 40) hanno valore contrarian
+significativo; i range intermedi vanno letti in contesto con NAAIM e Put/Call.
+        """)
+
+
+# =============================================================================
+# GRAFICO YIELD CURVE
+# =============================================================================
+
+def render_yield_curve_chart(fred_data: dict):
+    """Grafico storico curva 10Y-2Y e 10Y-3M con zona di inversione colorata."""
+    df_10y2y = fred_data.get("T10Y2Y", pd.DataFrame())
+    df_10y3m = fred_data.get("T10Y3M", pd.DataFrame())
+
+    if df_10y2y.empty and df_10y3m.empty:
+        st.warning("Dati curva non disponibili")
+        return
+
+    fig = go.Figure()
+
+    for df, name, color in [
+        (df_10y2y, "10Y – 2Y", "#3498db"),
+        (df_10y3m, "10Y – 3M", "#e67e22"),
+    ]:
+        if df.empty:
+            continue
+        df_plot = df.tail(756)  # ~3 anni di dati giornalieri
+        fig.add_trace(go.Scatter(
+            x=df_plot["date"], y=df_plot["value"],
+            name=name, line=dict(color=color, width=2),
+            hovertemplate=f"{name}: %{{y:.2f}}%<br>%{{x|%d %b %Y}}<extra></extra>",
+        ))
+        # Area rossa sotto lo zero (inversione)
+        fig.add_trace(go.Scatter(
+            x=df_plot["date"], y=df_plot["value"].clip(upper=0),
+            fill="tozeroy", fillcolor="rgba(231,76,60,0.15)",
+            line=dict(width=0), showlegend=False, hoverinfo="skip",
+        ))
+        # Area verde sopra lo zero (normale)
+        fig.add_trace(go.Scatter(
+            x=df_plot["date"], y=df_plot["value"].clip(lower=0),
+            fill="tozeroy", fillcolor="rgba(46,204,113,0.08)",
+            line=dict(width=0), showlegend=False, hoverinfo="skip",
+        ))
+
+    fig.add_hline(y=0, line_color="#e74c3c", line_dash="dash", line_width=1.5,
+                  annotation_text="Soglia inversione", annotation_position="bottom right",
+                  annotation_font_color="#e74c3c")
+
+    fig.update_layout(
+        height=300,
+        margin=dict(l=0, r=0, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#ccc",
+        legend=dict(orientation="h", y=1.08, x=0),
+        xaxis=dict(gridcolor="#2a2a2a", showgrid=True),
+        yaxis=dict(gridcolor="#2a2a2a", showgrid=True, ticksuffix="%",
+                   zeroline=True, zerolinecolor="#e74c3c", zerolinewidth=1),
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("📖 Come leggere la curva dei rendimenti", expanded=False):
+        st.markdown("""
+La **curva dei rendimenti** misura lo spread tra il Treasury a lungo termine e quello a breve.
+
+| Condizione | Zona | Cosa significa |
+|---|---|---|
+| **Spread > 0** (curva normale) | 🟢 | Gli investitori richiedono più rendimento per il lungo termine → aspettative di crescita |
+| **Spread = 0** (curva piatta) | 🟡 | Segnale di rallentamento economico in arrivo |
+| **Spread < 0** (curva invertita) | 🔴 | Recessione anticipata: storicamente ha preceduto 8 delle ultime 8 recessioni USA |
+
+**Lead time storico:** l'inversione anticipa la recessione in media di **12-18 mesi**.
+La **disinversione** (da negativo a positivo) spesso coincide con l'inizio effettivo della recessione — è lì che la disoccupazione inizia a salire.
+
+- **10Y – 2Y**: il più monitorato dagli operatori. Sensibile alle aspettative Fed.
+- **10Y – 3M**: preferito dalla ricerca Fed di NY come predittore recessione.
+        """)
 
 
 # =============================================================================
@@ -869,6 +986,10 @@ def main():
         st.subheader("💹 Asset & prezzi")
         render_assets_table(prices_summary)
 
+    # --- Yield Curve Chart ---
+    st.subheader("📉 Curva dei rendimenti (10Y-2Y · 10Y-3M)")
+    render_yield_curve_chart(fred_data)
+
     st.divider()
 
     # --- Sentiment + Posizionamento ---
@@ -876,6 +997,7 @@ def main():
     with col_sent:
         st.subheader("🌡️ Sentiment & regime")
         render_sentiment_table(naaim_df, putcall, prices_summary, prices_raw)
+        render_vix_legend()
     with col_pos:
         st.subheader("🎯 Posizionamento suggerito")
         render_positioning(phase)

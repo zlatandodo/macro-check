@@ -63,8 +63,6 @@ FRED_INDICATORS = {
     "BAMLH0A0HYM2": "HY credit spread",
     "DFF":         "Fed Funds rate",
     "DGS10":       "Treasury 10Y",
-    "PPCDFSA066MSFRBPHI": "ISM Prices proxy (Philly Fed)",
-    "PPCDISA066MSFRBNY":  "ISM Prices proxy (NY Fed)",
 }
 
 # Asset/sector da yfinance (ticker → label)
