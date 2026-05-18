@@ -1580,6 +1580,320 @@ def render_cycle_reasoning(phase: str, cpi_yoy, curve_last, unrate_last, unrate_
 
 
 # =============================================================================
+# SEGNALE COMPOSITO — COT + Regime + Momentum
+# =============================================================================
+
+# Quanto ogni asset COT è favorito dal regime macro corrente
+# Score: +2 fortemente favorito, +1 favorito, 0 neutro, -1 sfavorito, -2 fortemente sfavorito
+_COT_REGIME_SCORE = {
+    "Oro": {
+        "goldilocks": -1, "reflation":  0, "stagflation": +2,
+        "late_cycle": +2, "disinflation": +2, "transition": +1,
+    },
+    "Argento": {
+        "goldilocks": -1, "reflation": +1, "stagflation": +2,
+        "late_cycle":  0, "disinflation":  0, "transition":  0,
+    },
+    "Rame": {
+        "goldilocks": +1, "reflation": +2, "stagflation":  0,
+        "late_cycle": -1, "disinflation": -2, "transition":  0,
+    },
+    "WTI Crude": {
+        "goldilocks":  0, "reflation": +2, "stagflation": +2,
+        "late_cycle": -1, "disinflation": -2, "transition":  0,
+    },
+    "Natural Gas": {
+        "goldilocks":  0, "reflation": +1, "stagflation": +2,
+        "late_cycle":  0, "disinflation": -1, "transition":  0,
+    },
+    "E-mini S&P": {
+        "goldilocks": +2, "reflation": +1, "stagflation": -2,
+        "late_cycle": -1, "disinflation": -2, "transition":  0,
+    },
+    "DXY": {
+        "goldilocks":  0, "reflation": -1, "stagflation": +1,
+        "late_cycle": +1, "disinflation": +1, "transition":  0,
+    },
+    "Bitcoin": {
+        "goldilocks": +2, "reflation": +1, "stagflation": -1,
+        "late_cycle": -1, "disinflation": -2, "transition":  0,
+    },
+    "VIX": {
+        # Long VIX = comprare protezione
+        "goldilocks": -2, "reflation": -1, "stagflation": +1,
+        "late_cycle": +2, "disinflation": +2, "transition": +1,
+    },
+}
+
+# Ticker yfinance per il momentum (variazione 1M)
+_COT_MOMENTUM_TICKER = {
+    "Oro":        "GC=F",
+    "Argento":    "SI=F",
+    "Rame":       "HG=F",
+    "WTI Crude":  "CL=F",
+    "Natural Gas":"NG=F",
+    "E-mini S&P": "^GSPC",
+    "DXY":        "DX-Y.NYB",
+    "Bitcoin":    "BTC-USD",
+    "VIX":        "^VIX",
+}
+
+
+def _cot_score_from_row(row) -> int:
+    """Converte la posizione COT della settimana in score -2…+2 (contrarian)."""
+    oi      = row.get("open_interest") or 0
+    mm_net  = row.get("mm_net")        or 0
+    com_net = row.get("commercial_net") or 0
+    if oi == 0:
+        return 0
+    mm_pct  = mm_net  / oi * 100
+    com_pct = com_net / oi * 100
+
+    # Score specs (contrarian: long specs = bearish, short specs = bullish)
+    if mm_pct > 25:    s = -2
+    elif mm_pct > 10:  s = -1
+    elif mm_pct < -25: s = +2
+    elif mm_pct < -10: s = +1
+    else:              s = 0
+
+    # Boost se commercial confermano la direzione opposta agli specs
+    if s > 0 and com_pct > 10:    s = min(s + 1, 2)
+    elif s < 0 and com_pct < -10: s = max(s - 1, -2)
+
+    return s
+
+
+def _momentum_score(label: str, prices_summary: dict) -> int:
+    """Score momentum -1/0/+1 basato sulla variazione 1M del prezzo."""
+    ticker = _COT_MOMENTUM_TICKER.get(label)
+    if not ticker:
+        return 0
+    data = prices_summary.get(ticker, {})
+    ch = data.get("change_1m")
+    if ch is None:
+        return 0
+    # VIX invertito: VIX che scende = bullish per mercato, non per chi è long VIX
+    if label == "VIX":
+        ch = -ch
+    if ch > 5:   return +1
+    if ch < -5:  return -1
+    return 0
+
+
+def compute_composite_signals(
+    cot_df: pd.DataFrame,
+    sector_df: pd.DataFrame,
+    prices_summary: dict,
+    phase: str,
+) -> list[dict]:
+    """
+    Per ogni asset COT calcola score composito = COT + Regime + Momentum.
+    Restituisce lista di dict ordinata per score decrescente, solo segnali non neutri.
+    """
+    results = []
+
+    # ── Asset COT ────────────────────────────────────────────────────────────
+    if not cot_df.empty:
+        for _, row in cot_df.iterrows():
+            label = row["label"]
+
+            cot_s    = _cot_score_from_row(row)
+            regime_s = _COT_REGIME_SCORE.get(label, {}).get(phase, 0)
+            mom_s    = _momentum_score(label, prices_summary)
+
+            total = cot_s + regime_s + mom_s
+
+            # Costruisci spiegazione concisa
+            parts = []
+            if cot_s >= 2:    parts.append("specs capitolati (contrarian bullish)")
+            elif cot_s == 1:  parts.append("specs in posizione short")
+            elif cot_s <= -2: parts.append("specs sovraffollati (contrarian bearish)")
+            elif cot_s == -1: parts.append("specs in posizione long")
+            if regime_s >= 2:  parts.append(f"regime {phase.replace('_',' ')} molto favorevole")
+            elif regime_s == 1: parts.append(f"regime {phase.replace('_',' ')} favorevole")
+            elif regime_s <= -2: parts.append(f"regime {phase.replace('_',' ')} molto sfavorevole")
+            elif regime_s == -1: parts.append(f"regime {phase.replace('_',' ')} sfavorevole")
+            if mom_s == 1:   parts.append("momentum positivo (+1M)")
+            elif mom_s == -1: parts.append("momentum negativo (+1M)")
+
+            sintesi = " · ".join(parts) if parts else "segnali misti"
+
+            results.append({
+                "label":    label,
+                "total":    total,
+                "cot_s":    cot_s,
+                "regime_s": regime_s,
+                "mom_s":    mom_s,
+                "sintesi":  sintesi,
+                "source":   "COT",
+            })
+
+    # ── Settori top e bottom RS (senza COT) ──────────────────────────────────
+    if not sector_df.empty:
+        fit_sectors = SECTOR_REGIME_FIT.get(phase, [])
+        for _, row in sector_df.iterrows():
+            label  = row["label"]
+            rs1m   = row.get("rs_1m")
+            pct200 = row.get("pct_ma200")
+
+            if rs1m is None:
+                continue
+
+            fits   = any(f.lower() in label.lower() or label.lower() in f.lower()
+                         for f in fit_sectors)
+            regime_s = +1 if fits else -1
+            mom_s    = +1 if rs1m > 3 else (-1 if rs1m < -3 else 0)
+            above200 = pct200 is not None and pct200 > 0
+
+            # Per i settori non c'è COT — includi solo se regime+momentum convergono
+            total = regime_s + mom_s
+            if total == 0:
+                continue
+
+            parts = []
+            if fits and mom_s == 1:
+                parts.append(f"regime {phase.replace('_',' ')} favorevole + RS positiva")
+            elif fits and mom_s == -1:
+                parts.append(f"regime favorevole ma RS negativa — potenziale dip")
+            elif not fits and mom_s == -1:
+                parts.append(f"regime sfavorevole + RS negativa — evitare")
+            elif not fits and mom_s == 1:
+                parts.append("momentum positivo ma contro il regime — fragile")
+            if above200:
+                parts.append("sopra MA200")
+            elif pct200 is not None:
+                parts.append(f"sotto MA200 ({pct200:+.1f}%)")
+
+            results.append({
+                "label":    label,
+                "total":    total,
+                "cot_s":    0,
+                "regime_s": regime_s,
+                "mom_s":    mom_s,
+                "sintesi":  " · ".join(parts),
+                "source":   "Settore",
+            })
+
+    # Ordina per score decrescente
+    results.sort(key=lambda x: x["total"], reverse=True)
+    return results
+
+
+def render_composite_summary(
+    cot_df: pd.DataFrame,
+    sector_df: pd.DataFrame,
+    prices_summary: dict,
+    phase: str,
+):
+    """Sunto finale: le idee di posizionamento più chiare, in ordine di convinzione."""
+    signals = compute_composite_signals(cot_df, sector_df, prices_summary, phase)
+    if not signals:
+        return
+
+    st.markdown(
+        "<h2 style='font-family:Inter,Helvetica Neue,Arial,sans-serif; "
+        "font-weight:700; letter-spacing:-0.03em; margin-bottom:4px;'>"
+        "📌 Sunto — Idee di posizionamento</h2>"
+        "<p style='color:#555; font-size:0.82rem; margin-top:0; margin-bottom:1.2rem;'>"
+        "Segnale composito: COT (posizionamento futures) + Regime macro + Momentum 1M. "
+        "Più alto il punteggio, più i segnali convergono nella stessa direzione.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # Mappa score → etichetta + colore
+    def _label_color(total):
+        if total >= 3:   return "🟢 COMPRA",    "#2ecc71"
+        if total >= 1:   return "🟡 ACCUMULA",  "#f39c12"
+        if total == 0:   return "⚪ NEUTRO",     "#666"
+        if total >= -2:  return "🟡 RIDUCI",    "#e67e22"
+        return               "🔴 EVITA",     "#e74c3c"
+
+    # Mostra prima i buy, poi i sell
+    buys  = [s for s in signals if s["total"] >= 1]
+    sells = [s for s in signals if s["total"] <= -1]
+
+    def _render_group(items, title):
+        if not items:
+            return
+        st.markdown(
+            f"<div style='font-size:0.72rem; font-weight:600; color:#666; "
+            f"letter-spacing:0.1em; text-transform:uppercase; "
+            f"margin-bottom:8px;'>{title}</div>",
+            unsafe_allow_html=True,
+        )
+        for s in items:
+            lbl, col = _label_color(s["total"])
+            score_bar = ""
+            for i in range(1, 6):
+                filled = abs(s["total"]) >= i
+                bar_col = col if filled else "#1e1e1e"
+                score_bar += (
+                    f"<span style='display:inline-block; width:10px; height:10px; "
+                    f"border-radius:2px; background:{bar_col}; margin-right:2px;'></span>"
+                )
+            source_tag = (
+                f"<span style='font-size:0.65rem; color:#444; "
+                f"background:#1a1a1a; border-radius:3px; padding:1px 5px; "
+                f"margin-left:6px;'>{s['source']}</span>"
+            )
+            st.markdown(
+                f"""
+                <div style="border-left:3px solid {col}; background:{col}0d;
+                            border-radius:4px; padding:9px 14px; margin-bottom:7px;
+                            display:flex; justify-content:space-between;
+                            align-items:center; flex-wrap:wrap; gap:6px;">
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    <span style="font-weight:700; color:{col}; font-size:0.82rem;">{lbl}</span>
+                    <span style="font-weight:600; font-size:0.9rem;">{s['label']}</span>
+                    {source_tag}
+                  </div>
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <div>{score_bar}</div>
+                    <span style="font-size:0.72rem; color:#555;">
+                      COT {s['cot_s']:+d} · Regime {s['regime_s']:+d} · Mom {s['mom_s']:+d}
+                      = <b style="color:{col};">{s['total']:+d}</b>
+                    </span>
+                  </div>
+                  <div style="width:100%; font-size:0.76rem; color:#888;
+                              margin-top:2px;">{s['sintesi']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    col_buy, col_sell = st.columns(2)
+    with col_buy:
+        _render_group(buys, "✅ Long / Accumula")
+    with col_sell:
+        _render_group(sells, "⛔ Evita / Riduci")
+
+    # Legenda punteggio
+    with st.expander("ℹ️ Come si calcola il punteggio", expanded=False):
+        st.markdown("""
+**Il punteggio va da −5 a +5.** È la somma di tre componenti:
+
+| Componente | Range | Logica |
+|---|---|---|
+| **COT** | −2 → +2 | Contrarian: specs molto long = −2 (sovraffollati), specs molto short = +2 (capitolati). +1 bonus se i Commercial confermano |
+| **Regime** | −2 → +2 | Quanto quell'asset è storicamente favorito dal ciclo macro attuale (goldilocks, stagflation, ecc.) |
+| **Momentum** | −1 → +1 | Variazione prezzo 1M: > +5% = +1, < −5% = −1 |
+
+**Soglie di lettura:**
+
+| Punteggio | Segnale | Significato |
+|---|---|---|
+| ≥ +3 | 🟢 COMPRA | Tutti e tre i segnali convergono al rialzo |
+| +1 / +2 | 🟡 ACCUMULA | La maggioranza dei segnali è rialzista, ma non tutti |
+| 0 | ⚪ Neutro | Segnali misti, non agire |
+| −1 / −2 | 🟡 RIDUCI | La maggioranza è ribassista, considera alleggerimento |
+| ≤ −3 | 🔴 EVITA | Tutti convergono al ribasso |
+
+**Importante:** il segnale COT è contrarian e indica *dove sei* nella distribuzione storica, non *quando* inverti.
+Può restare in zona estrema per settimane. Usa il composito come bussola, non come ordine di acquisto.
+        """)
+
+
+# =============================================================================
 # APP PRINCIPALE
 # =============================================================================
 
@@ -1721,6 +2035,11 @@ def main():
         render_cot_table(cot_df)
         render_cot_zscore_legend()
         render_cot_extreme_signals(cot_df)
+
+    st.divider()
+
+    # --- Sunto finale ---
+    render_composite_summary(cot_df, sector_df, prices_summary, phase)
 
 
 if __name__ == "__main__":
