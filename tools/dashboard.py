@@ -661,6 +661,7 @@ def render_sector_suggestions(sector_df: pd.DataFrame, phase: str):
 
     for _, row in laggards.iterrows():
         label       = row["label"]
+        ticker      = row.get("ticker", "")
         rs1m        = row.get("rs_1m")
         rs3m        = row.get("rs_3m")
         pct_ma50    = row.get("pct_ma50")
@@ -752,7 +753,7 @@ def render_sector_suggestions(sector_df: pd.DataFrame, phase: str):
                 )
 
         suggestions.append({
-            "signal": signal, "color": color, "label": label,
+            "signal": signal, "color": color, "label": label, "ticker": ticker,
             "tesi": tesi, "fits_regime": fits_regime,
             "rs1m": rs1m, "rs3m": rs3m, "ma200": pct_ma200, "ma50": pct_ma50,
         })
@@ -766,13 +767,21 @@ def render_sector_suggestions(sector_df: pd.DataFrame, phase: str):
         rs3m_disp = f"RS 3M: {s['rs3m']:+.1f}%" if s["rs3m"] is not None else ""
         ma200_disp = f"{s['ma200']:+.1f}% vs MA200" if s["ma200"] is not None else ""
         meta = " · ".join(filter(None, [rs3m_disp, ma200_disp]))
+        ticker_tag = (
+            f"<span style='font-size:0.68rem; color:#aaa; background:#1a1a1a; "
+            f"border-radius:3px; padding:1px 6px; margin-left:6px; "
+            f"font-weight:600; letter-spacing:0.04em;'>{s['ticker']}</span>"
+            if s.get("ticker") else ""
+        )
         st.markdown(
             f"""
             <div style="border-left:4px solid {s['color']}; background:{s['color']}12;
                         border-radius:5px; padding:10px 14px; margin-bottom:9px;">
               <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:4px;">
                 <span style="font-weight:700; color:{s['color']}; font-size:0.88rem;">{s['signal']}</span>
-                <span style="font-weight:600; font-size:0.9rem;">{s['label']}</span>
+                <span style="display:flex; align-items:center;">
+                  <span style="font-weight:600; font-size:0.9rem;">{s['label']}</span>{ticker_tag}
+                </span>
                 <span style="color:#e74c3c; font-size:0.82rem;">RS 1M: {s['rs1m']:+.1f}%</span>
                 <span style="color:#888; font-size:0.75rem;">{meta}</span>
               </div>
